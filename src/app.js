@@ -23,7 +23,8 @@ const gradeRoutes       = require('./routes/grade.routes');
 const pointRoutes       = require('./routes/point.routes');
 const noteRoutes        = require('./routes/note.routes');
 const lessonRoutes      = require('./routes/lesson.routes');
-const heroRoutes        = require('./routes/hero.routes');
+const heroRoutes    = require('./routes/hero.routes');
+require('./models/HeroAlbum'); // register HeroAlbum model
 const studentSelfRoutes = require('./routes/studentSelf.routes');
 const accountRoutes     = require('./routes/account.routes');
 

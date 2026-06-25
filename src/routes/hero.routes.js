@@ -1,37 +1,22 @@
-// src/routes/hero.routes.js
 const express = require('express');
 const router  = express.Router();
-
-const { getHeroes, getHero, createHero, updateHero, deleteHero } =
+const { getAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum, addPhotos, deletePhoto, updatePhoto } =
   require('../controllers/hero.controller');
 const { protect, isTeacher } = require('../middleware/auth.middleware');
-const { validate }           = require('../middleware/validate.middleware');
 const { uploadHero }         = require('../config/multer');
-const { createHeroSchema, updateHeroSchema } = require('./misc.schemas');
 
-// GET /api/heroes        — public (no auth needed for display)
-router.get('/',    getHeroes);
-router.get('/:id', getHero);
+// Public
+router.get('/',    getAlbums);
+router.get('/:id', getAlbum);
 
-// POST /api/heroes       — teacher + optional photo upload
-router.post(
-  '/',
-  protect, isTeacher,
-  uploadHero.single('photo'),
-  validate(createHeroSchema),
-  createHero
-);
+// Teacher only
+router.post('/',   protect, isTeacher, createAlbum);
+router.put('/:id', protect, isTeacher, updateAlbum);
+router.delete('/:id', protect, isTeacher, deleteAlbum);
 
-// PUT /api/heroes/:id
-router.put(
-  '/:id',
-  protect, isTeacher,
-  uploadHero.single('photo'),
-  validate(updateHeroSchema),
-  updateHero
-);
-
-// DELETE /api/heroes/:id
-router.delete('/:id', protect, isTeacher, deleteHero);
+// Photos
+router.post('/:id/photos', protect, isTeacher, uploadHero.array('photos', 20), addPhotos);
+router.patch('/:albumId/photos/:photoId', protect, isTeacher, updatePhoto);
+router.delete('/:albumId/photos/:photoId', protect, isTeacher, deletePhoto);
 
 module.exports = router;

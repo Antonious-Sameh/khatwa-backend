@@ -1,56 +1,124 @@
-// src/controllers/hero.controller.js
-
-const Hero = require('../models/Hero');
-const { uploadHero } = require('../config/multer');
-const { success, created, notFound } = require('../utils/apiResponse');
+const HeroAlbum  = require('../models/HeroAlbum');
+const { cloudinary, uploadHero } = require('../config/multer');
+const { success, created, notFound, error: apiError } = require('../utils/apiResponse');
 const { asyncHandler } = require('../middleware/error.middleware');
 
-// ── GET /api/heroes ───────────────────────────────────────────────────────────
-const getHeroes = asyncHandler(async (req, res) => {
-  const heroes = await Hero.find().sort({ order: 1, createdAt: -1 }).lean();
-  return success(res, { heroes, total: heroes.length });
+// ── Helper: delete from Cloudinary ───────────────────────────────────────────
+const destroyCloudinary = async (url) => {
+  if (!url) return;
+  try {
+    const parts  = url.split('/');
+    const file   = parts[parts.length - 1].split('.')[0];
+    const folder = parts[parts.length - 2];
+    await cloudinary.uploader.destroy(`${folder}/${file}`);
+  } catch {}
+};
+
+// ── GET /api/heroes ── list albums ───────────────────────────────────────────
+const getAlbums = asyncHandler(async (req, res) => {
+  const albums = await HeroAlbum.find()
+    .select('title description coverUrl order photos createdAt')
+    .sort({ order: 1, createdAt: -1 }).lean();
+  // Attach photo count
+  albums.forEach(a => { a.photoCount = a.photos?.length || 0; });
+  return success(res, { albums, total: albums.length });
 });
 
-// ── GET /api/heroes/:id ───────────────────────────────────────────────────────
-const getHero = asyncHandler(async (req, res) => {
-  const hero = await Hero.findById(req.params.id).lean();
-  if (!hero) return notFound(res, 'البطل غير موجود');
-  return success(res, { hero });
+// ── GET /api/heroes/:id ── single album with photos ──────────────────────────
+const getAlbum = asyncHandler(async (req, res) => {
+  const album = await HeroAlbum.findById(req.params.id).lean();
+  if (!album) return notFound(res, 'الألبوم غير موجود');
+  return success(res, { album });
 });
 
-// ── POST /api/heroes ──────────────────────────────────────────────────────────
-const createHero = asyncHandler(async (req, res) => {
-  const { name, achievement, graduationYear, order } = req.body;
-  const photo = req.file?.path || null;   // Cloudinary URL from multer
-
-  const hero = await Hero.create({ name, achievement, graduationYear, order, photo });
-  return created(res, { hero }, 'تم إضافة البطل بنجاح');
+// ── POST /api/heroes ── create album ─────────────────────────────────────────
+const createAlbum = asyncHandler(async (req, res) => {
+  const { title, description, order } = req.body;
+  if (!title?.trim()) return apiError(res, 'اسم الألبوم مطلوب', 400);
+  const album = await HeroAlbum.create({
+    title: title.trim(),
+    description: description?.trim() || null,
+    order: order ? Number(order) : 0,
+  });
+  return created(res, { album }, 'تم إنشاء الألبوم بنجاح');
 });
 
-// ── PUT /api/heroes/:id ───────────────────────────────────────────────────────
-const updateHero = asyncHandler(async (req, res) => {
-  const hero = await Hero.findById(req.params.id);
-  if (!hero) return notFound(res, 'البطل غير موجود');
-
-  const { name, achievement, graduationYear, order } = req.body;
-  if (name           !== undefined) hero.name           = name;
-  if (achievement    !== undefined) hero.achievement    = achievement;
-  if (graduationYear !== undefined) hero.graduationYear = graduationYear;
-  if (order          !== undefined) hero.order          = order;
-  if (req.file?.path)               hero.photo          = req.file.path;
-
-  await hero.save();
-  return success(res, { hero }, 'تم تعديل بيانات البطل بنجاح');
+// ── PUT /api/heroes/:id ── update album info ──────────────────────────────────
+const updateAlbum = asyncHandler(async (req, res) => {
+  const album = await HeroAlbum.findById(req.params.id);
+  if (!album) return notFound(res, 'الألبوم غير موجود');
+  const { title, description, order } = req.body;
+  if (title       !== undefined) album.title       = title.trim();
+  if (description !== undefined) album.description = description?.trim() || null;
+  if (order       !== undefined) album.order       = Number(order);
+  await album.save();
+  return success(res, { album }, 'تم تعديل الألبوم بنجاح');
 });
 
-// ── DELETE /api/heroes/:id ────────────────────────────────────────────────────
-const deleteHero = asyncHandler(async (req, res) => {
-  const hero = await Hero.findById(req.params.id);
-  if (!hero) return notFound(res, 'البطل غير موجود');
-
-  // TODO: delete photo from Cloudinary if exists
-  await hero.deleteOne();
-  return success(res, {}, 'تم حذف البطل بنجاح');
+// ── DELETE /api/heroes/:id ── delete album + all photos ──────────────────────
+const deleteAlbum = asyncHandler(async (req, res) => {
+  const album = await HeroAlbum.findById(req.params.id);
+  if (!album) return notFound(res, 'الألبوم غير موجود');
+  await Promise.allSettled([
+    ...album.photos.map(p => destroyCloudinary(p.url)),
+    destroyCloudinary(album.coverUrl),
+  ]);
+  await album.deleteOne();
+  return success(res, {}, 'تم حذف الألبوم والصور بنجاح');
 });
 
-module.exports = { getHeroes, getHero, createHero, updateHero, deleteHero };
+// ── POST /api/heroes/:id/photos ── upload multiple photos ────────────────────
+const addPhotos = asyncHandler(async (req, res) => {
+  const album = await HeroAlbum.findById(req.params.id);
+  if (!album) return notFound(res, 'الألبوم غير موجود');
+  if (!req.files?.length) return apiError(res, 'لم يتم رفع أي صور', 400);
+
+  const captions = req.body.captions
+    ? (Array.isArray(req.body.captions) ? req.body.captions : [req.body.captions])
+    : [];
+
+  const newPhotos = req.files.map((f, i) => ({
+    url:     f.path,
+    caption: captions[i]?.trim() || null,
+    order:   album.photos.length + i,
+  }));
+
+  album.photos.push(...newPhotos);
+  // Set first photo as cover if no cover yet
+  if (!album.coverUrl && newPhotos.length) album.coverUrl = newPhotos[0].url;
+  await album.save();
+
+  return success(res, { photos: newPhotos, album }, 'تم رفع الصور بنجاح');
+});
+
+// ── DELETE /api/heroes/:albumId/photos/:photoId ───────────────────────────────
+const deletePhoto = asyncHandler(async (req, res) => {
+  const album = await HeroAlbum.findById(req.params.albumId);
+  if (!album) return notFound(res, 'الألبوم غير موجود');
+  const photo = album.photos.id(req.params.photoId);
+  if (!photo) return notFound(res, 'الصورة غير موجودة');
+
+  await destroyCloudinary(photo.url);
+  // If deleted photo was cover, reset cover to next photo
+  if (album.coverUrl === photo.url) {
+    const remaining = album.photos.filter(p => p._id.toString() !== req.params.photoId);
+    album.coverUrl  = remaining[0]?.url || null;
+  }
+  photo.deleteOne();
+  await album.save();
+  return success(res, {}, 'تم حذف الصورة بنجاح');
+});
+
+// ── PATCH /api/heroes/:albumId/photos/:photoId ── update caption ──────────────
+const updatePhoto = asyncHandler(async (req, res) => {
+  const album = await HeroAlbum.findById(req.params.albumId);
+  if (!album) return notFound(res, 'الألبوم غير موجود');
+  const photo = album.photos.id(req.params.photoId);
+  if (!photo) return notFound(res, 'الصورة غير موجودة');
+  if (req.body.caption !== undefined) photo.caption = req.body.caption?.trim() || null;
+  if (req.body.setAsCover) album.coverUrl = photo.url;
+  await album.save();
+  return success(res, { photo }, 'تم التعديل بنجاح');
+});
+
+module.exports = { getAlbums, getAlbum, createAlbum, updateAlbum, deleteAlbum, addPhotos, deletePhoto, updatePhoto };
