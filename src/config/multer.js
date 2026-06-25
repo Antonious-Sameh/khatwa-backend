@@ -1,87 +1,79 @@
 // src/config/multer.js
-// Configures Multer with Cloudinary storage for file uploads.
-// Supports: images, PDFs, and (future) videos.
+// Multer configuration using cloudinary v2 directly — no multer-storage-cloudinary.
+// Uses custom CloudinaryStorageEngine that streams files to Cloudinary in memory.
 
-const multer = require('multer');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
-const cloudinary = require('cloudinary').v2;
-const {
-  CLOUDINARY_CLOUD_NAME,
-  CLOUDINARY_API_KEY,
-  CLOUDINARY_API_SECRET,
-} = require('./env');
+const multer                               = require('multer');
+const { CloudinaryStorageEngine, cloudinary } = require('./cloudinaryStorage');
 
-// Initialize Cloudinary
-cloudinary.config({
-  cloud_name: CLOUDINARY_CLOUD_NAME,
-  api_key: CLOUDINARY_API_KEY,
-  api_secret: CLOUDINARY_API_SECRET,
-});
-
-// ── Avatar / Photo uploads ────────────────────────────────────────────────────
-const avatarStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'khatwa-plus/avatars',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-    transformation: [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }],
+// ── Avatar / Profile photo ────────────────────────────────────────────────────
+const uploadAvatar = multer({
+  storage: new CloudinaryStorageEngine({
+    params: {
+      folder:          'khatwa-plus/avatars',
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+      resource_type:   'image',
+      transformation:  [{ width: 400, height: 400, crop: 'fill', gravity: 'face' }],
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) return cb(null, true);
+    cb(new Error('الملف يجب أن يكون صورة (JPG, PNG, WEBP)'));
   },
 });
 
-// ── PDF / document uploads ────────────────────────────────────────────────────
-const pdfStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'khatwa-plus/files',
-    allowed_formats: ['pdf'],
-    resource_type: 'raw',
+// ── PDF documents ─────────────────────────────────────────────────────────────
+const uploadPDF = multer({
+  storage: new CloudinaryStorageEngine({
+    params: {
+      folder:          'khatwa-plus/pdfs',
+      allowed_formats: ['pdf'],
+      resource_type:   'raw',
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB (Vercel Free limit)
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') return cb(null, true);
+    cb(new Error('الملف يجب أن يكون PDF'));
   },
 });
 
-// ── Hero photos ───────────────────────────────────────────────────────────────
-const heroStorage = new CloudinaryStorage({
-  cloudinary,
-  params: {
-    folder: 'khatwa-plus/heroes',
-    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
-    transformation: [{ width: 600, height: 600, crop: 'fill' }],
+// ── Hero / achievement photos ─────────────────────────────────────────────────
+const uploadHero = multer({
+  storage: new CloudinaryStorageEngine({
+    params: {
+      folder:          'khatwa-plus/heroes',
+      allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+      resource_type:   'image',
+      transformation:  [{ width: 600, height: 600, crop: 'fill' }],
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/')) return cb(null, true);
+    cb(new Error('الملف يجب أن يكون صورة'));
   },
 });
 
-// ── Future: Video uploads ─────────────────────────────────────────────────────
-// const videoStorage = new CloudinaryStorage({
-//   cloudinary,
-//   params: {
-//     folder: 'khatwa-plus/videos',
-//     resource_type: 'video',
-//     allowed_formats: ['mp4', 'mov', 'avi'],
-//   },
-// });
-
-// File size limits
-const limits = {
-  avatar: { fileSize: 5 * 1024 * 1024 },   // 5 MB
-  pdf:    { fileSize: 50 * 1024 * 1024 },   // 50 MB
-  hero:   { fileSize: 5 * 1024 * 1024 },    // 5 MB
-};
-
-const uploadAvatar = multer({ storage: avatarStorage, limits: limits.avatar });
-const uploadPDF    = multer({ storage: pdfStorage,    limits: limits.pdf    });
-const uploadHero   = multer({ storage: heroStorage,   limits: limits.hero   });
-
-// ── Answer sheet (PDF or image) ───────────────────────────────────────────────
-const answerSheetStorage = new CloudinaryStorage({
-  cloudinary,
-  params: (req, file) => {
-    const isPdf = file.mimetype === 'application/pdf';
-    return {
-      folder: 'khatwa-plus/files',
-      allowed_formats: isPdf ? ['pdf'] : ['jpg','jpeg','png','webp'],
-      resource_type: isPdf ? 'raw' : 'image',
-    };
+// ── Exam answer sheet (PDF or image) ─────────────────────────────────────────
+const uploadAnswerSheet = multer({
+  storage: new CloudinaryStorageEngine({
+    // Dynamic params based on file type
+    params: (req, file) => {
+      const isPdf = file.mimetype === 'application/pdf';
+      return {
+        folder:          'khatwa-plus/answer-sheets',
+        allowed_formats: isPdf ? ['pdf'] : ['jpg', 'jpeg', 'png', 'webp'],
+        resource_type:   isPdf ? 'raw' : 'image',
+      };
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB
+  fileFilter: (req, file, cb) => {
+    const allowed = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (allowed.includes(file.mimetype)) return cb(null, true);
+    cb(new Error('الملف يجب أن يكون PDF أو صورة'));
   },
 });
-
-const uploadAnswerSheet = multer({ storage: answerSheetStorage, limits: { fileSize: 20 * 1024 * 1024 } });
 
 module.exports = { cloudinary, uploadAvatar, uploadPDF, uploadHero, uploadAnswerSheet };
