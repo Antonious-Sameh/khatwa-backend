@@ -5,9 +5,10 @@ const express = require('express');
 const router  = express.Router();
 
 const {
+  updatePeriod, 
+  createPayment,
   getGroupPayments,
   getStudentPayments,
-  createPayment,
   updatePayment,
   addInstallment,
   updateInstallment,
@@ -39,6 +40,10 @@ router.get('/student/:studentId', getStudentPayments);
 // ── Payment record CRUD ───────────────────────────────────────────────────────
 // POST /api/payments
 router.post('/', isTeacher, validate(createPaymentSchema), createPayment);
+
+// ── ميزة تعديل اسم الفترة الجديدة ──
+// PATCH /api/payments/:paymentId/period
+router.patch('/:paymentId/period', isTeacher, updatePeriod);
 
 // PATCH /api/payments/:paymentId
 router.patch('/:paymentId', isTeacher, validate(updatePaymentSchema), updatePayment);

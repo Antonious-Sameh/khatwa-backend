@@ -264,7 +264,29 @@ const getYearSummary = asyncHandler(async (req, res) => {
   });
 });
 
+
+
+// ── PATCH /api/payments/:paymentId/period ─────────────────────────────────────
+const updatePeriod = asyncHandler(async (req, res) => {
+  const { month } = req.body;
+  if (!month?.trim()) return error(res, 'اسم الفترة مطلوب', 400);
+
+  const payment = await Payment.findById(req.params.paymentId);
+  if (!payment) return notFound(res, 'سجل المدفوعات غير موجود');
+
+  payment.month = month.trim();
+  await payment.save();
+
+  return success(res, { payment }, 'تم تعديل اسم الفترة بنجاح');
+});
+
+
+
+
+
 module.exports = {
+  updatePeriod,
+  createPayment,
   getGroupPayments,
   getStudentPayments,
   createPayment,
