@@ -1,33 +1,28 @@
 // src/utils/generateCode.js
-// Generates unique student codes in format: ST{YEAR}{3-digit-sequence}
+// Generates unique numeric-only student codes (6 digits)
+// Easy to type on mobile — no letters, no confusion
 
 const User = require('../models/User');
 
 const generateStudentCode = async () => {
-  const year   = new Date().getFullYear();
-  const prefix = `ST${year}`;
-
-  // Find the highest existing code for this year using codePlain
-  const last = await User
-    .findOne({ codePlain: new RegExp(`^${prefix}`) })
-    .sort({ codePlain: -1 })
-    .select('codePlain')
-    .lean();
-
-  if (!last) return `${prefix}001`;
-
-  const lastSeq = parseInt(last.codePlain.replace(prefix, ''), 10);
-  const nextSeq = String(lastSeq + 1).padStart(3, '0');
-  return `${prefix}${nextSeq}`;
-};
-
-const generateResetCode = () => {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (let i = 0; i < 8; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
+  const MAX_TRIES = 20;
+  for (let i = 0; i < MAX_TRIES; i++) {
+    // Random 6-digit number: 100000 – 999999
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const exists = await User.exists({ codePlain: code });
+    if (!exists) return code;
   }
-  return code;
+  // Fallback: 8-digit if 6-digit space is somehow exhausted
+  for (let i = 0; i < MAX_TRIES; i++) {
+    const code = String(Math.floor(10000000 + Math.random() * 90000000));
+    const exists = await User.exists({ codePlain: code });
+    if (!exists) return code;
+  }
+  throw new Error('تعذّر توليد كود فريد — يرجى المحاولة مرة أخرى');
 };
+
+// Reset code: 6 random digits (same style — easy on mobile)
+const generateResetCode = () =>
+  String(Math.floor(100000 + Math.random() * 900000));
 
 module.exports = { generateStudentCode, generateResetCode };
