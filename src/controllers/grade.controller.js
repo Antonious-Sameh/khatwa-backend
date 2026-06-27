@@ -386,6 +386,15 @@ const deletePaperExam = asyncHandler(async (req, res) => {
 });
 
 module.exports = {
-  ...module.exports,
-  getPaperExams, getPaperExamSheet, createPaperExam, bulkPaperGrades, deletePaperExam,
+  getExamGrades,
+  enterGrade,
+  bulkEnterGrades,
+  updateGrade,
+  getStudentGrades,
+  getRankings,
+  getPaperExams,
+  getPaperExamSheet,
+  createPaperExam,
+  bulkPaperGrades,
+  deletePaperExam,
 };
