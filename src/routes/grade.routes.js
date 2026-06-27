@@ -17,36 +17,35 @@ const {
   deletePaperExam,
 } = require('../controllers/grade.controller');
 
-// استيراد protect و isTeacher مع بعض لحماية المسارات بالتوكين والرتبة
-const { protect, isTeacher } = require('../middleware/auth.middleware');
+const { isTeacher }  = require('../middleware/auth.middleware');
 const { validate }   = require('../middleware/validate.middleware');
 const {
   enterGradeSchema, updateGradeSchema, bulkGradesSchema,
 } = require('./exam.schemas');
 
-// جلب الترتيب والترتيب العام (مفتوح للكل أو محمي حسب رغبتك، بيفضل protect)
-router.get('/rankings', protect, getRankings);
+// GET /api/grades/rankings?year=     ← must be before /:id
+router.get('/rankings', getRankings);
 
-// جلب درجات طالب معين
-router.get('/student/:studentId', protect, getStudentGrades);
+// GET /api/grades/student/:studentId
+router.get('/student/:studentId', getStudentGrades);
 
-// 🚨 جميع المسارات التالية تخص المدرس فقط ومحمية بالتوكين والرتبة
-router.use(protect);
-router.use(isTeacher);
+// GET /api/grades?exam=
+router.get('/', isTeacher, getExamGrades);
 
-// مسارات الامتحانات الورقية (يجب أن تكون قبل المسار الرئيسي '/' لعدم التداخل)
-router.get('/paper-exams',       getPaperExams);
-router.get('/paper-exam-sheet',  getPaperExamSheet);
-router.post('/paper-exam',       createPaperExam);
-router.post('/paper-exam-bulk',  bulkPaperGrades);
-router.delete('/paper-exam',     deletePaperExam);
+// POST /api/grades          — single upsert
+router.post('/', isTeacher, validate(enterGradeSchema), enterGrade);
 
-// المسار الرئيسي للدرجات الإلكترونية
-router.get('/', getExamGrades);
+// POST /api/grades/bulk     — full sheet upsert
+router.post('/bulk', isTeacher, validate(bulkGradesSchema), bulkEnterGrades);
 
-// إدخال وتعديل الدرجات الإلكترونية
-router.post('/', validate(enterGradeSchema), enterGrade);
-router.post('/bulk', validate(bulkGradesSchema), bulkEnterGrades);
-router.put('/:id', validate(updateGradeSchema), updateGrade);
+// PUT /api/grades/:id
+router.put('/:id', isTeacher, validate(updateGradeSchema), updateGrade);
+
+// Paper exam routes
+router.get('/paper-exams',       isTeacher, getPaperExams);
+router.get('/paper-exam-sheet',  isTeacher, getPaperExamSheet);
+router.post('/paper-exam',       isTeacher, createPaperExam);
+router.post('/paper-exam-bulk',  isTeacher, bulkPaperGrades);
+router.delete('/paper-exam',     isTeacher, deletePaperExam);
 
 module.exports = router;
