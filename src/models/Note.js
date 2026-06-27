@@ -36,6 +36,7 @@ const noteSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
     }],
+    imageUrl: { type: String, default: null }, // optional image attached to note
   },
   { timestamps: true }
 );

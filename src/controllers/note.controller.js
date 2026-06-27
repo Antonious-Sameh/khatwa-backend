@@ -99,7 +99,7 @@ const markAllRead = asyncHandler(async (req, res) => {
 
 // ── POST /api/notes (teacher) ─────────────────────────────────────────────────
 const createNote = asyncHandler(async (req, res) => {
-  const { type, text, academicYear, studentId } = req.body;
+  const { type, text, academicYear, studentId, imageUrl } = req.body;
 
   if (type === 'private') {
     const student = await User.findOne({ _id: studentId, role: 'student' }).lean();
@@ -113,10 +113,35 @@ const createNote = asyncHandler(async (req, res) => {
     student:      type === 'private' ? studentId    : null,
     createdBy:    req.user.userId,
     readBy:       [],
+    imageUrl:     imageUrl || null,
   });
 
   await note.populate('student', 'name codePlain');
   return created(res, { note }, 'تم إضافة الملاحظة بنجاح');
+});
+
+// ── POST /api/notes/upload-image (teacher) ────────────────────────────────────
+const uploadNoteImage = asyncHandler(async (req, res) => {
+  if (!req.file) return require('../utils/apiResponse').error(res, 'لم يتم رفع صورة', 400);
+  return require('../utils/apiResponse').success(res, { imageUrl: req.file.path }, 'تم رفع الصورة');
+});
+
+// ── DELETE /api/notes/:id/image (teacher) ─────────────────────────────────────
+const deleteNoteImage = asyncHandler(async (req, res) => {
+  const note = await Note.findById(req.params.id);
+  if (!note) return notFound(res, 'الملاحظة غير موجودة');
+
+  if (note.imageUrl) {
+    try {
+      const { cloudinary } = require('../config/multer');
+      const parts  = note.imageUrl.split('/');
+      const pubId  = parts[parts.length - 2] + '/' + parts[parts.length - 1].split('.')[0];
+      await cloudinary.uploader.destroy(pubId);
+    } catch {}
+    note.imageUrl = null;
+    await note.save();
+  }
+  return require('../utils/apiResponse').success(res, {}, 'تم حذف الصورة');
 });
 
 // ── DELETE /api/notes/:id (teacher) ──────────────────────────────────────────
@@ -127,4 +152,4 @@ const deleteNote = asyncHandler(async (req, res) => {
   return success(res, {}, 'تم حذف الملاحظة بنجاح');
 });
 
-module.exports = { getNotes, getStudentNotes, getUnreadCount, markAsRead, markAllRead, createNote, deleteNote };
+module.exports = { getNotes, getStudentNotes, getUnreadCount, markAsRead, markAllRead, createNote, deleteNote, uploadNoteImage, deleteNoteImage };

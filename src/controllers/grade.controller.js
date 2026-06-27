@@ -269,11 +269,123 @@ const getRankings = asyncHandler(async (req, res) => {
   return success(res, { year, total: ranked.length, rankings: ranked });
 });
 
+// ══════════════════════════════════════════════════════════════════════════════
+// PAPER EXAM GRADES — create exam entry + bulk enter scores
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── GET /api/grades/paper-exams?year= ─────────────────────────────────────────
+// List all paper exam "headers" (distinct examTitle per year)
+const getPaperExams = asyncHandler(async (req, res) => {
+  const { year } = req.query;
+  if (!year) return error(res, 'السنة الدراسية مطلوبة', 400);
+
+  const groups = await Grade.aggregate([
+    { $match: { examType: 'paper', exam: null } },
+    {
+      $lookup: {
+        from: 'users', localField: 'student', foreignField: '_id',
+        as: 'studentData',
+      },
+    },
+    { $unwind: '$studentData' },
+    { $match: { 'studentData.academicYear': year } },
+    {
+      $group: {
+        _id: '$examTitle',
+        maxScore:    { $first: '$maxScore' },
+        studentCount:{ $sum: 1 },
+        createdAt:   { $first: '$createdAt' },
+        ids:         { $push: '$_id' },
+      },
+    },
+    { $sort: { createdAt: -1 } },
+  ]);
+
+  return success(res, { paperExams: groups, total: groups.length });
+});
+
+// ── GET /api/grades/paper-exam-sheet?year=&title= ────────────────────────────
+// Get all students + their grades for a specific paper exam
+const getPaperExamSheet = asyncHandler(async (req, res) => {
+  const { year, title } = req.query;
+  if (!year||!title) return error(res, 'السنة والعنوان مطلوبان', 400);
+
+  const students = await User
+    .find({ role:'student', academicYear:year, isActive:true })
+    .select('_id name codePlain group')
+    .populate('group','name')
+    .sort({ name:1 }).lean();
+
+  const grades = await Grade.find({ examType:'paper', exam:null, examTitle:title }).lean();
+  const gradeMap = {};
+  grades.forEach(g => { gradeMap[g.student.toString()] = g; });
+
+  const maxScore = grades[0]?.maxScore || 0;
+
+  const sheet = students.map(s => ({
+    student: s,
+    gradeId: gradeMap[s._id.toString()]?._id || null,
+    score:   gradeMap[s._id.toString()]?.score ?? null,
+    entered: !!gradeMap[s._id.toString()],
+  }));
+
+  return success(res, { title, maxScore, year, sheet });
+});
+
+// ── POST /api/grades/paper-exam ────────────────────────────────────────────────
+// Create a new paper exam header (just stores first batch of empty grades)
+const createPaperExam = asyncHandler(async (req, res) => {
+  const { title, maxScore, academicYear } = req.body;
+  if (!title?.trim()||!academicYear) return error(res, 'الاسم والمرحلة مطلوبان', 400);
+
+  // Check not duplicate
+  const students = await User
+    .find({ role:'student', academicYear, isActive:true })
+    .select('_id').lean();
+
+  if (!students.length) return error(res, 'لا يوجد طلاب في هذه المرحلة', 400);
+
+  // Create placeholder grade rows so the exam "exists"
+  const ops = students.map(s => ({
+    updateOne: {
+      filter: { student:s._id, examType:'paper', exam:null, examTitle:title.trim() },
+      update: { $setOnInsert: { student:s._id, examType:'paper', exam:null, examTitle:title.trim(), maxScore:Number(maxScore)||0, score:0, correctedBy:null } },
+      upsert: true,
+    },
+  }));
+  await Grade.bulkWrite(ops);
+
+  return created(res, { title:title.trim(), maxScore:Number(maxScore)||0, academicYear }, 'تم إنشاء الامتحان الورقي');
+});
+
+// ── POST /api/grades/paper-exam-bulk ─────────────────────────────────────────
+// Bulk upsert scores for a paper exam
+const bulkPaperGrades = asyncHandler(async (req, res) => {
+  const { title, maxScore, academicYear, grades: gradeList } = req.body;
+  if (!title||!gradeList?.length) return error(res, 'البيانات ناقصة', 400);
+
+  const ops = gradeList.map(g => ({
+    updateOne: {
+      filter: { student:g.studentId, examType:'paper', exam:null, examTitle:title },
+      update: { $set: { score:Number(g.score)||0, maxScore:Number(maxScore)||0, correctedBy:null } },
+      upsert: true,
+    },
+  }));
+  await Grade.bulkWrite(ops);
+  return success(res, {}, 'تم حفظ الدرجات بنجاح');
+});
+
+// ── DELETE /api/grades/paper-exam ─────────────────────────────────────────────
+const deletePaperExam = asyncHandler(async (req, res) => {
+  const { title, year } = req.query;
+  if (!title||!year) return error(res, 'العنوان والمرحلة مطلوبان', 400);
+  const students = await User.find({ role:'student', academicYear:year }).select('_id').lean();
+  const ids = students.map(s=>s._id);
+  await Grade.deleteMany({ examType:'paper', exam:null, examTitle:title, student:{ $in:ids } });
+  return success(res, {}, 'تم حذف الامتحان الورقي وجميع درجاته');
+});
+
 module.exports = {
-  getExamGrades,
-  enterGrade,
-  bulkEnterGrades,
-  updateGrade,
-  getStudentGrades,
-  getRankings,
+  ...module.exports,
+  getPaperExams, getPaperExamSheet, createPaperExam, bulkPaperGrades, deletePaperExam,
 };

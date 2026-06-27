@@ -10,6 +10,11 @@ const {
   updateGrade,
   getStudentGrades,
   getRankings,
+  getPaperExams,
+  getPaperExamSheet,
+  createPaperExam,
+  bulkPaperGrades,
+  deletePaperExam,
 } = require('../controllers/grade.controller');
 
 const { isTeacher }  = require('../middleware/auth.middleware');
@@ -35,5 +40,12 @@ router.post('/bulk', isTeacher, validate(bulkGradesSchema), bulkEnterGrades);
 
 // PUT /api/grades/:id
 router.put('/:id', isTeacher, validate(updateGradeSchema), updateGrade);
+
+// Paper exam routes
+router.get('/paper-exams',       isTeacher, getPaperExams);
+router.get('/paper-exam-sheet',  isTeacher, getPaperExamSheet);
+router.post('/paper-exam',       isTeacher, createPaperExam);
+router.post('/paper-exam-bulk',  isTeacher, bulkPaperGrades);
+router.delete('/paper-exam',     isTeacher, deletePaperExam);
 
 module.exports = router;
