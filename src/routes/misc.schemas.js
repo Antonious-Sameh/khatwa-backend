@@ -22,7 +22,7 @@ const addPointSchema = Joi.object({
     'number.min':   'عدد النقاط يجب أن يكون واحد على الأقل',
     'any.required': 'عدد النقاط مطلوب',
   }),
-  reason: Joi.string().min(2).max(200).required().messages({
+  reason: Joi.string().min(1).max(200).optional().allow('', null).messages({
     'any.required': 'سبب النقاط مطلوب',
   }),
 });

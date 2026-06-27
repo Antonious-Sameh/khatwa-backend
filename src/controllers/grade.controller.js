@@ -49,20 +49,20 @@ const getExamGrades = asyncHandler(async (req, res) => {
     };
   });
 
-  const entered  = sheet.filter(r => r.entered);
-  const avgScore = entered.length > 0
-    ? (entered.reduce((s, r) => s + r.score, 0) / entered.length).toFixed(1)
-    : 0;
-  const highest  = entered.length > 0 ? Math.max(...entered.map(r => r.score)) : 0;
-  const lowest   = entered.length > 0 ? Math.min(...entered.map(r => r.score)) : 0;
+  const enteredRows = sheet.filter(r => r.entered);
+  const enteredCount = enteredRows.length;
+  const avgScore = enteredCount > 0
+    ? (enteredRows.reduce((s, r) => s + (r.score || 0), 0) / enteredCount).toFixed(1) : 0;
+  const highest  = enteredCount > 0 ? Math.max(...enteredRows.map(r => r.score || 0)) : 0;
+  const lowest   = enteredCount > 0 ? Math.min(...enteredRows.map(r => r.score || 0)) : 0;
 
   return success(res, {
     exam,
     sheet,
     summary: {
-      total:   students.length,
-      entered: entered.length,
-      pending: students.length - entered.length,
+      total:    students.length,
+      entered:  enteredCount,           // رقم صريح مش مصفوفة
+      pending:  students.length - enteredCount,
       avgScore: Number(avgScore),
       highest,
       lowest,
