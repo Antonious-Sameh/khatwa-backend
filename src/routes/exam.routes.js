@@ -3,7 +3,7 @@ const router  = express.Router();
 const {
   getExams, getExam, createExam, updateExam, deleteExam,
   changeStatus, uploadAnswerSheet: uploadAnswerSheetCtrl, deleteAnswerSheet,
-  submitExam, getResults, getMyResult,
+  submitExam, getResults, getMyResult, uploadPaperFile, deletePaperFile, // ضفناهم هنا
 } = require('../controllers/exam.controller');
 const { protect, isTeacher, isStudent } = require('../middleware/auth.middleware');
 const { uploadAnswerSheet } = require('../config/multer');
@@ -19,6 +19,10 @@ router.delete('/:id',  isTeacher, deleteExam);
 router.patch('/:id/status', isTeacher, changeStatus);
 router.post('/:id/answer-sheet',   isTeacher, uploadAnswerSheet.single('answerSheet'), uploadAnswerSheetCtrl);
 router.delete('/:id/answer-sheet', isTeacher, deleteAnswerSheet);
+
+// مسارات رفع وحذف ملف الامتحان الورقي الجديدة
+router.post('/:id/paper-file',   isTeacher, uploadAnswerSheet.single('paperFile'), uploadPaperFile);
+router.delete('/:id/paper-file', isTeacher, deletePaperFile);
 router.get('/:id/results',         isTeacher, getResults);
 
 // Student only

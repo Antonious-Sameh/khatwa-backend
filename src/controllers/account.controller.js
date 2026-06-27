@@ -103,4 +103,11 @@ const updateInfo = asyncHandler(async (req, res) => {
   return success(res, { user: user.toSafeObject() }, 'تم تحديث البيانات بنجاح');
 });
 
-module.exports = { getAccount, uploadAvatar, removeAvatar, changeCode, updateInfo };
+// ── GET /api/account/teacher-info (public — for students to see teacher branding) ──
+const getTeacherInfo = asyncHandler(async (req, res) => {
+  const teacher = await User.findOne({ role: 'teacher', isActive: true })
+    .select('name avatar').lean();
+  return success(res, { teacher: teacher || null });
+});
+
+module.exports = { getAccount, uploadAvatar: uploadAvatarCtrl, removeAvatar, changeCode, updateInfo, getTeacherInfo };

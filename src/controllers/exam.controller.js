@@ -40,10 +40,11 @@ const getExam = asyncHandler(async (req, res) => {
 
 // ── POST /api/exams ───────────────────────────────────────────────────────────
 const createExam = asyncHandler(async (req, res) => {
-  const { title, academicYear, description, examDate, duration, status, questions } = req.body;
+  const { title, academicYear, description, examDate, duration, status, questions, examType, maxScore } = req.body;
+  const type = examType || 'electronic';
 
-  // Validate questions
-  if (questions && questions.length > 0) {
+  // Validate electronic exam questions
+  if (type === 'electronic' && questions && questions.length > 0) {
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i];
       if (!q.text?.trim()) return apiError(res, `السؤال ${i+1}: النص مطلوب`, 400);
@@ -57,10 +58,12 @@ const createExam = asyncHandler(async (req, res) => {
 
   const exam = await Exam.create({
     title, academicYear, description: description || null,
-    examDate: examDate || null,
-    duration: duration || null,
-    status: status || 'draft',
-    questions: questions || [],
+    examDate:  examDate  || null,
+    duration:  duration  || null,
+    status:    status    || 'draft',
+    examType:  type,
+    questions: type === 'electronic' ? (questions || []) : [],
+    maxScore:  type === 'paper' ? (Number(maxScore) || 0) : 0,
     createdBy: req.user.userId,
   });
 
@@ -253,8 +256,55 @@ const getMyResult = asyncHandler(async (req, res) => {
   return success(res, { exam, submission: submission || null });
 });
 
+
+// ── POST /api/exams/:id/paper-file (teacher) ─────────────────────────────────
+const uploadPaperFile = asyncHandler(async (req, res) => {
+  if (!req.file) return apiError(res, 'لم يتم رفع ملف', 400);
+
+  const exam = await Exam.findById(req.params.id);
+  if (!exam) return notFound(res, 'الامتحان غير موجود');
+
+  // Delete old paper file if exists from Cloudinary
+  if (exam.paperFileUrl) {
+    try {
+      const parts = exam.paperFileUrl.split('/');
+      const pubId = parts[parts.length-2] + '/' + parts[parts.length-1].split('.')[0];
+      await cloudinary.uploader.destroy(pubId, { resource_type: exam.paperFileType === 'pdf' ? 'raw' : 'image' });
+    } catch {}
+  }
+
+  const fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'image';
+  exam.paperFileUrl  = req.file.path;
+  exam.paperFileType = fileType;
+  await exam.save();
+
+  return success(res, { paperFileUrl: exam.paperFileUrl, paperFileType: fileType }, 'تم رفع ملف الامتحان بنجاح');
+});
+
+// ── DELETE /api/exams/:id/paper-file (teacher) ───────────────────────────────
+const deletePaperFile = asyncHandler(async (req, res) => {
+  const exam = await Exam.findById(req.params.id);
+  if (!exam) return notFound(res, 'الامتحان غير موجود');
+
+  if (exam.paperFileUrl) {
+    try {
+      const parts = exam.paperFileUrl.split('/');
+      const pubId = parts[parts.length-2] + '/' + parts[parts.length-1].split('.')[0];
+      await cloudinary.uploader.destroy(pubId, { resource_type: exam.paperFileType === 'pdf' ? 'raw' : 'image' });
+    } catch {}
+  }
+
+  exam.paperFileUrl = null; 
+  exam.paperFileType = null;
+  await exam.save();
+
+  return success(res, {}, 'تم حذف ملف الامتحان');
+});
+
+
 module.exports = {
   getExams, getExam, createExam, updateExam, deleteExam,
   changeStatus, uploadAnswerSheet, deleteAnswerSheet,
-  submitExam, getResults, getMyResult,
+  submitExam, getResults, getMyResult,uploadPaperFile, 
+  deletePaperFile,
 };

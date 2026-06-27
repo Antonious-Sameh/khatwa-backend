@@ -1,11 +1,14 @@
 // src/routes/account.routes.js
 const express = require('express');
 const router  = express.Router();
-const { getAccount, uploadAvatar: uploadAvatarCtrl, removeAvatar, changeCode, updateInfo } =  require('../controllers/account.controller');
+const { getAccount, uploadAvatar: uploadAvatarCtrl, removeAvatar, changeCode, updateInfo, getTeacherInfo } = require('../controllers/account.controller');
 const { protect, isTeacher } = require('../middleware/auth.middleware');
 const { uploadAvatar }       = require('../config/multer');
 
-// جميع المسارات القادمة تحتاج أن يكون المستخدم مسجل دخول
+// Public — students can fetch teacher branding without auth
+router.get('/teacher-info', getTeacherInfo);
+
+// All routes require authentication
 router.use(protect);
 
 // GET  /api/account/me
