@@ -27,25 +27,59 @@ const getExamGrades = asyncHandler(async (req, res) => {
     .sort({ name: 1 })
     .lean();
 
-  // Existing grades for this exam
-  const grades = await Grade
-    .find({ exam: examId })
-    .select('student score note correctedBy createdAt')
-    .lean();
+  // ── تجميع الدرجات بناءً على نوع الامتحان (إلكتروني أو ورقي) ──────────────────
+  let scoreMap = {};
 
-  const gradeMap = {};
-  grades.forEach((g) => { gradeMap[g.student.toString()] = g; });
+  if (exam.examType === 'electronic' || !exam.examType) {
+    // تحويل صريح لـ ObjectId لضمان دقة الاستعلام في جدول الامتحانات الإلكترونية
+    const examObjId = new mongoose.Types.ObjectId(examId);
+    const submissions = await ExamSubmission
+      .find({ exam: examObjId })
+      .select('student score percentage submittedAt maxScore')
+      .lean();
 
-  // Merge: every student shows their grade or null + calculate percentage (pct)
+    console.log(`[getExamGrades] examId=${examId} → found ${submissions.length} submissions`);
+    
+    submissions.forEach(s => {
+      scoreMap[s.student.toString()] = {
+        score:       s.score,
+        percentage:  s.percentage ?? (s.maxScore > 0 ? Math.round((s.score / s.maxScore) * 100) : 0),
+        submittedAt: s.submittedAt,
+        maxScore:    s.maxScore,
+      };
+    });
+  } else {
+    // للامتحانات الورقية واليدوية — نقرأ من جدول Grade العادي
+    const grades = await Grade
+      .find({ exam: examId })
+      .select('student score note correctedBy createdAt')
+      .lean();
+
+    grades.forEach((g) => {
+      scoreMap[g.student.toString()] = {
+        score:       g.score,
+        percentage:  g.percentage || null,
+        submittedAt: g.createdAt,
+        note:        g.note || null,
+        gradeId:     g._id,
+      };
+    });
+  }
+
+  // دمج البيانات: كل طالب يظهر مع درجته أو null وحساب النسبة المئوية
   const sheet = students.map((s) => {
-    const entry = gradeMap[s._id.toString()];
+    const entry = scoreMap[s._id.toString()];
+    const pct = entry?.percentage
+      ?? (entry && exam.maxScore > 0 ? Math.round((entry.score / exam.maxScore) * 100) : null);
+
     return {
-      student:   s,
-      gradeId:   entry?._id   || null,
-      score:     entry?.score  ?? null,
-      note:      entry?.note   || null,
-      pct:       entry?.percentage ?? (entry && exam.maxScore > 0 ? Math.round((entry.score / exam.maxScore) * 100) : null),
-      entered:   !!entry,
+      student:     s,
+      gradeId:     entry?.gradeId     || null,
+      score:       entry?.score       ?? null,
+      note:        entry?.note        || null,
+      pct,
+      submittedAt: entry?.submittedAt || null,
+      entered:     !!entry,
     };
   });
 

@@ -94,7 +94,7 @@ app.use('/api/payments',   protect, paymentRoutes);     // الـ isTeacher مط
 app.use('/api/exams',      protect, examRoutes);        // مختلط: امتحانات، تسليم، ونتائج أوراق الإجابة
 app.use('/api/grades',     protect, gradeRoutes);       // درجات الطلاب والتقييمات
 app.use('/api/points',     protect, pointRoutes);       // نقاط ومكافآت الطلاب
-  app.use('/api/notes',      protect, noteRoutes);        // ملاحظات وإشعارات المقروء وغير المقروء
+app.use('/api/notes',      protect, noteRoutes);        // ملاحظات وإشعارات المقروء وغير المقروء
 app.use('/api/lessons',    protect, lessonRoutes);      // الدروس، الـ Stream والـ Heartbeat الجديد لحساب وقت المشاهدة
 
 // لوحة الشرف (الـ GET للعامة، والتعديل محمي جوة الـ router نفسه)
