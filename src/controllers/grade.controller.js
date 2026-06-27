@@ -10,6 +10,8 @@ const { asyncHandler } = require('../middleware/error.middleware');
 
 // ── GET /api/grades?exam= ─────────────────────────────────────────────────────
 // Full grade sheet for an exam — all students in the exam's year.
+// ── GET /api/grades?exam= ─────────────────────────────────────────────────────
+// Full grade sheet for an exam — all students in the exam's year.
 const getExamGrades = asyncHandler(async (req, res) => {
   const { exam: examId } = req.query;
   if (!examId) return error(res, 'معرف الامتحان مطلوب', 400);
@@ -34,32 +36,33 @@ const getExamGrades = asyncHandler(async (req, res) => {
   const gradeMap = {};
   grades.forEach((g) => { gradeMap[g.student.toString()] = g; });
 
-  // Merge: every student shows their grade or null
+  // Merge: every student shows their grade or null + calculate percentage (pct)
   const sheet = students.map((s) => {
-    const g = gradeMap[s._id.toString()];
+    const entry = gradeMap[s._id.toString()];
     return {
       student:   s,
-      gradeId:   g?._id   || null,
-      score:     g?.score  ?? null,
-      note:      g?.note   || null,
-      entered:   !!g,
+      gradeId:   entry?._id   || null,
+      score:     entry?.score  ?? null,
+      note:      entry?.note   || null,
+      pct:       entry?.percentage ?? (entry && exam.maxScore > 0 ? Math.round((entry.score / exam.maxScore) * 100) : null),
+      entered:   !!entry,
     };
   });
 
-  const entered   = sheet.filter((r) => r.entered).length;
-  const avgScore  = entered > 0
-    ? (sheet.filter((r) => r.entered).reduce((s, r) => s + r.score, 0) / entered).toFixed(1)
+  const entered  = sheet.filter(r => r.entered);
+  const avgScore = entered.length > 0
+    ? (entered.reduce((s, r) => s + r.score, 0) / entered.length).toFixed(1)
     : 0;
-  const highest   = entered > 0 ? Math.max(...sheet.filter((r) => r.entered).map((r) => r.score)) : 0;
-  const lowest    = entered > 0 ? Math.min(...sheet.filter((r) => r.entered).map((r) => r.score)) : 0;
+  const highest  = entered.length > 0 ? Math.max(...entered.map(r => r.score)) : 0;
+  const lowest   = entered.length > 0 ? Math.min(...entered.map(r => r.score)) : 0;
 
   return success(res, {
     exam,
     sheet,
     summary: {
       total:   students.length,
-      entered,
-      pending: students.length - entered,
+      entered: entered.length,
+      pending: students.length - entered.length,
       avgScore: Number(avgScore),
       highest,
       lowest,
@@ -203,70 +206,78 @@ const getStudentGrades = asyncHandler(async (req, res) => {
 // Ranks students in an academic year by total score — descending.
 // ── GET /api/grades/rankings?year= ────────────────────────────────────────────
 // ترتيب الطلاب بدمج الدرجات اليدوية + تسليمات التصحيح التلقائي
+// ── GET /api/grades/rankings?year=&type= ─────────────────────────────────────
+// type = 'electronic' | 'paper' | (empty = both)
 const getRankings = asyncHandler(async (req, res) => {
-  const { year } = req.query;
+  const { year, type } = req.query;
   if (!year) return error(res, 'السنة الدراسية مطلوبة', 400);
 
-  // المصدر الأول: الدرجات اليدوية الرشيدة من المعلم
-  const manualAgg = await Grade.aggregate([
-    { $lookup: { from: 'exams', localField: 'exam', foreignField: '_id', as: 'examData' } },
-    { $unwind: '$examData' },
-    { $match: { 'examData.academicYear': year, 'examData.status': { $ne: 'draft' } } },
-    { $group: { _id: { student: '$student', exam: '$exam' }, score: { $first: '$score' }, maxScore: { $first: '$examData.maxScore' } } },
-    { $group: { _id: '$_id.student', totalScore: { $sum: '$score' }, totalMax: { $sum: '$maxScore' }, examCount: { $sum: 1 } } },
-  ]);
-
-  // المصدر الثاني: الامتحانات الإلكترونية الأوتوماتيكية
-  const autoAgg = await ExamSubmission.aggregate([
-    { $lookup: { from: 'exams', localField: 'exam', foreignField: '_id', as: 'examData' } },
-    { $unwind: '$examData' },
-    { $match: { 'examData.academicYear': year, 'examData.status': { $ne: 'draft' } } },
-    { $group: { _id: { student: '$student', exam: '$exam' }, score: { $first: '$score' }, maxScore: { $first: '$examData.maxScore' } } },
-    { $group: { _id: '$_id.student', totalScore: { $sum: '$score' }, totalMax: { $sum: '$maxScore' }, examCount: { $sum: 1 } } },
-  ]);
-
-  // دمج المجموعين معاً بذكاء في Map
-  const scoreMap = new Map();
-  autoAgg.forEach(r => scoreMap.set(r._id.toString(), { totalScore: r.totalScore, totalMax: r.totalMax, examCount: r.examCount }));
-  
-  manualAgg.forEach(r => {
-    const ex = scoreMap.get(r._id.toString()) || { totalScore: 0, totalMax: 0, examCount: 0 };
-    scoreMap.set(r._id.toString(), {
-      totalScore: ex.totalScore + r.totalScore,
-      totalMax:   ex.totalMax   + r.totalMax,
-      examCount:  ex.examCount  + r.examCount,
-    });
-  });
-
-  // جلب كافة الطلاب النشطين لهذه السنة الدراسية بربط مجموعاتهم
+  // All active students in year
   const students = await User
     .find({ role: 'student', academicYear: year, isActive: true })
     .select('_id name codePlain group avatar')
     .populate('group', 'name')
     .lean();
 
-  // حساب النسبة المئوية والترتيب التنازلي من الأعلى للأقل درجات
+  const scoreMap = new Map(); // studentId -> { totalScore, totalMax }
+  students.forEach(s => scoreMap.set(s._id.toString(), { totalScore: 0, totalMax: 0 }));
+
+  const addScores = (studentId, score, max) => {
+    const entry = scoreMap.get(studentId.toString());
+    if (entry) { entry.totalScore += score || 0; entry.totalMax += max || 0; }
+  };
+
+  // ── Electronic: from ExamSubmission ────────────────────────────────────────
+  if (!type || type === 'electronic') {
+    const electronicExams = await Exam.find({
+      academicYear: year,
+      status: { $ne: 'draft' },
+      $or: [{ examType: 'electronic' }, { examType: { $exists: false } }],
+    }).select('_id maxScore').lean();
+
+    const examMaxMap = {};
+    electronicExams.forEach(e => { examMaxMap[e._id.toString()] = e.maxScore || 0; });
+
+    const subs = await ExamSubmission.find({
+      exam: { $in: electronicExams.map(e => e._id) },
+    }).select('student exam score').lean();
+
+    subs.forEach(s => addScores(s.student, s.score, examMaxMap[s.exam.toString()] || 0));
+  }
+
+  // ── Paper: from Grade model (examType:'paper') ──────────────────────────────
+  if (!type || type === 'paper') {
+    const paperGrades = await Grade.find({
+      examType: 'paper',
+      exam: null,
+    }).populate({ path: 'student', select: 'academicYear', match: { academicYear: year } })
+      .select('student score maxScore').lean();
+
+    paperGrades.forEach(g => {
+      if (g.student) addScores(g.student._id, g.score, g.maxScore || 0);
+    });
+  }
+
+  // Build ranking list
   const ranked = students
-    .map(s => {
-      const d = scoreMap.get(s._id.toString()) || { totalScore: 0, totalMax: 0, examCount: 0 };
-      return {
-        student:    s,
-        totalScore: d.totalScore,
-        totalMax:   d.totalMax,
-        examCount:  d.examCount,
-        percentage: d.totalMax > 0 ? Math.round((d.totalScore / d.totalMax) * 100) : 0,
-      };
-    })
+    .map(s => ({
+      student:    { _id: s._id, name: s.name, codePlain: s.codePlain, group: s.group, avatar: s.avatar },
+      totalScore: scoreMap.get(s._id.toString())?.totalScore || 0,
+      totalMax:   scoreMap.get(s._id.toString())?.totalMax   || 0,
+      percentage: scoreMap.get(s._id.toString())?.totalMax > 0
+        ? Math.round((scoreMap.get(s._id.toString()).totalScore / scoreMap.get(s._id.toString()).totalMax) * 100)
+        : 0,
+    }))
     .sort((a, b) => b.totalScore - a.totalScore);
 
-  // تعيين الرتبة (Rank) مع معالجة المتساويين في النتيجة (Ties)
-  let currentRank = 1;
+  // Assign rank (ties get same rank)
+  let rank = 1;
   ranked.forEach((r, i) => {
-    if (i > 0 && r.totalScore < ranked[i-1].totalScore) currentRank = i + 1;
-    r.rank = currentRank;
+    if (i > 0 && r.totalScore < ranked[i-1].totalScore) rank = i + 1;
+    r.rank = rank;
   });
 
-  return success(res, { year, total: ranked.length, rankings: ranked });
+  return success(res, { year, type: type || 'all', total: ranked.length, rankings: ranked });
 });
 
 // ══════════════════════════════════════════════════════════════════════════════

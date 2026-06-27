@@ -201,72 +201,52 @@ const getMyRank = asyncHandler(async (req, res) => {
   const student = await User.findById(req.user.userId).lean();
   if (!student) return notFound(res, 'الطالب غير موجود');
 
-  // ── تجميع الدرجات لكل طالب من المصدرين (اليدوي والإلكتروني) ──────────────────────────
-  
-  // المصدر الأول: الدرجات اليدوية (Grade model)
-  const manualAgg = await Grade.aggregate([
-    { $lookup: { from: 'exams', localField: 'exam', foreignField: '_id', as: 'examData' } },
-    { $unwind: '$examData' },
-    { $match: { 'examData.academicYear': student.academicYear, 'examData.status': { $ne: 'draft' } } },
-    { $group: { _id: { student: '$student', exam: '$exam' }, score: { $first: '$score' }, maxScore: { $first: '$examData.maxScore' } } },
-    { $group: { _id: '$_id.student', totalScore: { $sum: '$score' }, totalMax: { $sum: '$maxScore' } } },
-  ]);
+  const year = student.academicYear;
 
-  // المصدر الثاني: الامتحانات الإلكترونية (ExamSubmission model)
-  const autoAgg = await ExamSubmission.aggregate([
-    { $lookup: { from: 'exams', localField: 'exam', foreignField: '_id', as: 'examData' } },
-    { $unwind: '$examData' },
-    { $match: { 'examData.academicYear': student.academicYear, 'examData.status': { $ne: 'draft' } } },
-    { $group: { _id: { student: '$student', exam: '$exam' }, score: { $first: '$score' }, maxScore: { $first: '$examData.maxScore' } } },
-    { $group: { _id: '$_id.student', totalScore: { $sum: '$score' }, totalMax: { $sum: '$maxScore' } } },
-  ]);
+  // ── Scores from electronic exams (ExamSubmission) ────────────────────────
+  const electronicExams = await Exam.find({
+    academicYear: year, status: { $ne: 'draft' },
+    $or: [{ examType: 'electronic' }, { examType: { $exists: false } }],
+  }).select('_id maxScore').lean();
 
-  // دمج المجموعتين في Map واحدة مع إعطاء الأولوية للدرجة اليدوية في حال التكرار
-  const scoreMap = new Map();
-  autoAgg.forEach(r => scoreMap.set(r._id.toString(), { totalScore: r.totalScore, totalMax: r.totalMax }));
-  
-  manualAgg.forEach(r => {
-    const existing = scoreMap.get(r._id.toString()) || { totalScore: 0, totalMax: 0 };
-    scoreMap.set(r._id.toString(), {
-      totalScore: existing.totalScore + r.totalScore,
-      totalMax:   existing.totalMax   + r.totalMax,
-    });
+  const myElecSubs = await ExamSubmission.find({
+    exam: { $in: electronicExams.map(e=>e._id) }, student: req.user.userId,
+  }).select('exam score').lean();
+
+  const myElecScore = myElecSubs.reduce((s,x)=>s+x.score,0);
+  const myElecMax   = electronicExams.reduce((s,e)=>s+(e.maxScore||0),0);
+
+  // ── All students' electronic scores for ranking ───────────────────────────
+  const allSubs = await ExamSubmission.find({
+    exam: { $in: electronicExams.map(e=>e._id) },
+  }).select('student exam score').lean();
+
+  const elecMap = new Map();
+  allSubs.forEach(s => {
+    const cur = elecMap.get(s.student.toString()) || 0;
+    elecMap.set(s.student.toString(), cur + s.score);
   });
 
-  // جلب الطلاب النشطين فقط في نفس السنة الدراسية لحساب الترتيب بينهم
-  const studentsInYear = await User
-    .find({ role: 'student', academicYear: student.academicYear, isActive: true })
-    .select('_id name codePlain group')
-    .lean();
+  const allStudents = await User.find({ role:'student', academicYear:year, isActive:true }).select('_id').lean();
 
-  // بناء قائمة الترتيب وفرزها تنازلياً حسب مجموع الدرجات
-  const rankList = studentsInYear
-    .map(s => ({
-      studentId:  s._id.toString(),
-      name:       s.name,
-      totalScore: scoreMap.get(s._id.toString())?.totalScore || 0,
-      totalMax:   scoreMap.get(s._id.toString())?.totalMax   || 0,
-    }))
-    .sort((a, b) => b.totalScore - a.totalScore);
+  const sorted = allStudents
+    .map(s => ({ id:s._id.toString(), score: elecMap.get(s._id.toString())||0 }))
+    .sort((a,b)=>b.score-a.score);
 
-  // تعيين الرتبة (الطلاب المتساوون في الدرجة يحصلون على نفس الترتيب)
-  let currentRank = 1;
-  rankList.forEach((r, i) => {
-    if (i > 0 && r.totalScore < rankList[i-1].totalScore) currentRank = i + 1;
-    r.rank = currentRank;
+  let rank = 1;
+  sorted.forEach((r,i) => {
+    if(i>0 && r.score < sorted[i-1].score) rank = i+1;
+    r.rank = rank;
   });
 
-  // استخراج بيانات الطالب الحالي من القائمة المرتبة
-  const myEntry = rankList.find(r => r.studentId === req.user.userId.toString());
+  const myEntry = sorted.find(r=>r.id===req.user.userId.toString());
 
   return success(res, {
     rank:       myEntry?.rank       || null,
-    totalScore: myEntry?.totalScore || 0,
-    totalMax:   myEntry?.totalMax   || 0,
-    outOf:      rankList.length,
-    percentage: myEntry?.totalMax > 0
-      ? Math.round((myEntry.totalScore / myEntry.totalMax) * 100)
-      : 0,
+    totalScore: myElecScore,
+    totalMax:   myElecMax,
+    outOf:      allStudents.length,
+    percentage: myElecMax > 0 ? Math.round((myElecScore/myElecMax)*100) : 0,
   });
 });
 
