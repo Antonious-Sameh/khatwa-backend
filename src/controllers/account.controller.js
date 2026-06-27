@@ -19,7 +19,7 @@ const getAccount = asyncHandler(async (req, res) => {
 
 // ── POST /api/account/avatar ──────────────────────────────────────────────────
 // multer uploadAvatar middleware runs before this
-const uploadAvatar = asyncHandler(async (req, res) => {
+const uploadAvatarCtrl = asyncHandler(async (req, res) => {
   if (!req.file) return apiError(res, 'لم يتم رفع صورة', 400);
 
   const user = await User.findById(req.user.userId);
