@@ -1,7 +1,7 @@
 // src/models/Lesson.js — Extended: lesson is now a content container (items[])
-// Fully Backward-compatible: all legacy and sequential fields still work!
-const mongoose = require('mongoose');
+// Backward-compatible: legacy videoUrl/fileUrl fields still work
 
+const mongoose = require('mongoose');
 const ACADEMIC_YEARS = ['first-prep','second-prep','third-prep','first-sec','second-sec'];
 
 // ── Content item sub-schema ───────────────────────────────────────────────────
@@ -32,24 +32,19 @@ const lessonSchema = new mongoose.Schema({
   description:  { type: String, default: null, trim: true, maxlength: 500 },
   order:        { type: Number, default: 0 },
   published:    { type: Boolean, default: false },
-  
+
   // ── Content items (new multi-content system) ──────────────────────────────
   items: [contentItemSchema],
-  
+
   // ── Legacy fields (kept for backward compat + video tracking) ────────────
-  type:         { type: String, enum: ['video','file'], default: 'video' },
-  videoUrl:     { type: String, default: null, trim: true },
-  duration:     { type: String, default: null },
+  type:     { type: String, enum: ['video','file'], default: 'video' },
+  videoUrl: { type: String, default: null, trim: true },
+  duration: { type: String, default: null },
   thumbnailUrl: { type: String, default: null },
-  fileUrl:      { type: String, default: null },
-  fileType:     { type: String, default: null },
-  fileSize:     { type: String, default: null },
-  uploadedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
-
-  // ── Sequential unlocking fields (Saved from your old code) ────────────────
-  requirePreviousLesson: { type: Boolean, default: false },
-  previousLesson:        { type: mongoose.Schema.Types.ObjectId, ref: 'Lesson', default: null },
-
+  fileUrl:  { type: String, default: null },
+  fileType: { type: String, default: null },
+  fileSize: { type: String, default: null },
+  uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });
 
 lessonSchema.index({ academicYear: 1, order: 1 });
