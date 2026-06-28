@@ -259,8 +259,107 @@ const markWatched = asyncHandler(async (req, res) => {
   return success(res, { log }, 'تم تسجيل المشاهدة');
 });
 
+
+// ── POST /api/lessons/:id/items ───────────────────────────────────────────────
+const addItem = asyncHandler(async (req, res) => {
+  const lesson = await require('../models/Lesson').findById(req.params.id);
+  if (!lesson) return notFound(res, 'الدرس غير موجود');
+
+  const { type, videoUrl, duration, imageUrl, imageCaption, pdfUrl, pdfName, title, body } = req.body;
+  if (!type) return apiError(res, 'نوع المحتوى مطلوب', 400);
+
+  const item = {
+    type,
+    order: lesson.items.length,
+    videoUrl:     videoUrl     || null,
+    duration:     duration     || null,
+    imageUrl:     imageUrl     || null,
+    imageCaption: imageCaption || null,
+    pdfUrl:       pdfUrl       || null,
+    pdfName:      pdfName      || null,
+    title:        title        || null,
+    body:         body         || null,
+  };
+
+  lesson.items.push(item);
+  await lesson.save();
+
+  return success(res, { item: lesson.items[lesson.items.length - 1], lesson }, 'تم إضافة المحتوى بنجاح');
+});
+
+// ── POST /api/lessons/:id/items/upload ───────────────────────────────────────
+// Upload image or PDF, return URL for use in addItem
+const uploadItemFile = asyncHandler(async (req, res) => {
+  if (!req.file) return apiError(res, 'لم يتم رفع ملف', 400);
+  return success(res, {
+    url:      req.file.path,
+    fileType: req.file.mimetype,
+    filename: req.file.originalname,
+  }, 'تم رفع الملف');
+});
+
+// ── PATCH /api/lessons/:id/items/:itemId ─────────────────────────────────────
+const updateItem = asyncHandler(async (req, res) => {
+  const lesson = await require('../models/Lesson').findById(req.params.id);
+  if (!lesson) return notFound(res, 'الدرس غير موجود');
+
+  const item = lesson.items.id(req.params.itemId);
+  if (!item) return notFound(res, 'عنصر المحتوى غير موجود');
+
+  const fields = ['videoUrl','duration','imageUrl','imageCaption','pdfUrl','pdfName','title','body'];
+  fields.forEach(f => { if (req.body[f] !== undefined) item[f] = req.body[f]; });
+
+  await lesson.save();
+  return success(res, { item }, 'تم تعديل المحتوى بنجاح');
+});
+
+// ── DELETE /api/lessons/:id/items/:itemId ─────────────────────────────────────
+const deleteItem = asyncHandler(async (req, res) => {
+  const lesson = await require('../models/Lesson').findById(req.params.id);
+  if (!lesson) return notFound(res, 'الدرس غير موجود');
+
+  const item = lesson.items.id(req.params.itemId);
+  if (!item) return notFound(res, 'عنصر المحتوى غير موجود');
+
+  // Delete from Cloudinary if image/pdf
+  if (item.imageUrl || item.pdfUrl) {
+    const { cloudinary } = require('../config/multer');
+    const url = item.imageUrl || item.pdfUrl;
+    try {
+      const parts = url.split('/');
+      const pubId = parts[parts.length-2] + '/' + parts[parts.length-1].split('.')[0];
+      await cloudinary.uploader.destroy(pubId, { resource_type: item.pdfUrl ? 'raw' : 'image' });
+    } catch {}
+  }
+
+  item.deleteOne();
+  await lesson.save();
+  return success(res, {}, 'تم حذف المحتوى بنجاح');
+});
+
+// ── PATCH /api/lessons/:id/items/reorder ─────────────────────────────────────
+const reorderItems = asyncHandler(async (req, res) => {
+  const { order } = req.body; // array of { itemId, order }
+  const lesson = await require('../models/Lesson').findById(req.params.id);
+  if (!lesson) return notFound(res, 'الدرس غير موجود');
+
+  order.forEach(({ itemId, order: o }) => {
+    const item = lesson.items.id(itemId);
+    if (item) item.order = o;
+  });
+
+  lesson.items.sort((a, b) => a.order - b.order);
+  await lesson.save();
+  return success(res, { items: lesson.items }, 'تم تعديل الترتيب');
+});
+
 module.exports = {
   getLessons, getLesson, createLesson, updateLesson,
   deleteLesson, togglePublish, reorderLessons,
   getStreamInfo, heartbeat, getViewers, markWatched,
+  addItem,
+  uploadItemFile,
+  updateItem,
+  deleteItem,
+  reorderItems,
 };

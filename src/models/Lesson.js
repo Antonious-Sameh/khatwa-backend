@@ -1,112 +1,58 @@
-// src/models/Lesson.js
-// Represents a single online lesson — either a video or a file (PDF).
-// Designed to support future features:
-//   - Real video URLs (Cloudinary / YouTube / Bunny.net)
-//   - Sequential unlocking (requirePreviousLesson)
-//   - Watch tracking via WatchLog
-
+// src/models/Lesson.js — Extended: lesson is now a content container (items[])
+// Fully Backward-compatible: all legacy and sequential fields still work!
 const mongoose = require('mongoose');
 
-const ACADEMIC_YEARS = [
-  'first-prep', 'second-prep', 'third-prep', 'first-sec', 'second-sec',
-];
+const ACADEMIC_YEARS = ['first-prep','second-prep','third-prep','first-sec','second-sec'];
 
-const lessonSchema = new mongoose.Schema(
-  {
-    title: {
-      type:      String,
-      required:  [true, 'عنوان الدرس مطلوب'],
-      trim:      true,
-      minlength: [2,   'العنوان قصير جداً'],
-      maxlength: [200, 'العنوان طويل جداً'],
-    },
-
-    academicYear: {
-      type:     String,
-      enum:     { values: ACADEMIC_YEARS, message: 'السنة الدراسية غير صحيحة' },
-      required: [true, 'السنة الدراسية مطلوبة'],
-    },
-
-    type: {
-      type:     String,
-      enum:     { values: ['video', 'file'], message: 'النوع يجب أن يكون video أو file' },
-      required: [true, 'نوع الدرس مطلوب'],
-    },
-
-    // Display order within the year (1, 2, 3 ...)
-    order: {
-      type:    Number,
-      default: 0,
-    },
-
-    // true  → visible to students
-    // false → draft, teacher-only
-    published: {
-      type:    Boolean,
-      default: false,
-    },
-
-    // ── Video-specific ────────────────────────────────────────────────────────
-    // Supports: Cloudinary URL, YouTube URL, Bunny.net URL, or any embed URL.
-    // Kept as a plain String so we can switch providers without schema changes.
-    videoUrl: {
-      type:    String,
-      default: null,
-      trim:    true,
-    },
-
-    duration: {
-      type:    String,     // "35:20" — human-readable
-      default: null,
-    },
-
-    thumbnailUrl: {
-      type:    String,
-      default: null,
-    },
-
-    // ── File-specific ─────────────────────────────────────────────────────────
-    fileUrl: {
-      type:    String,
-      default: null,
-      trim:    true,
-    },
-
-    fileType: {
-      type:    String,     // "pdf", "docx", etc.
-      default: null,
-    },
-
-    fileSize: {
-      type:    String,     // "2.4 MB" — stored as string for display
-      default: null,
-    },
-
-    // ── Future: sequential unlocking ─────────────────────────────────────────
-    // When true: student cannot access this lesson until previousLesson is completed.
-    // The enforcement logic lives in the student lesson controller.
-    requirePreviousLesson: {
-      type:    Boolean,
-      default: false,
-    },
-
-    previousLesson: {
-      type:    mongoose.Schema.Types.ObjectId,
-      ref:     'Lesson',
-      default: null,
-    },
-
-    uploadedBy: {
-      type:    mongoose.Schema.Types.ObjectId,
-      ref:     'User',
-      default: null,
-    },
+// ── Content item sub-schema ───────────────────────────────────────────────────
+const contentItemSchema = new mongoose.Schema({
+  type: {
+    type: String,
+    enum: ['video','image','pdf','article'],
+    required: true,
   },
-  { timestamps: true }
-);
+  order:    { type: Number, default: 0 },
+  // video
+  videoUrl: { type: String, default: null, trim: true },
+  duration: { type: String, default: null },
+  // image
+  imageUrl:    { type: String, default: null },
+  imageCaption:{ type: String, default: null, maxlength: 300 },
+  // pdf
+  pdfUrl:   { type: String, default: null },
+  pdfName:  { type: String, default: null },
+  // article
+  title:    { type: String, default: null, trim: true, maxlength: 200 },
+  body:     { type: String, default: null, maxlength: 10000 },
+}, { _id: true, timestamps: true });
 
-// ── Indexes ───────────────────────────────────────────────────────────────────
-lessonSchema.index({ academicYear: 1, type: 1, order: 1 });
+const lessonSchema = new mongoose.Schema({
+  title:        { type: String, required: [true,'عنوان الدرس مطلوب'], trim: true, minlength: 2, maxlength: 200 },
+  academicYear: { type: String, enum: { values: ACADEMIC_YEARS, message: 'السنة الدراسية غير صحيحة' }, required: true },
+  description:  { type: String, default: null, trim: true, maxlength: 500 },
+  order:        { type: Number, default: 0 },
+  published:    { type: Boolean, default: false },
+  
+  // ── Content items (new multi-content system) ──────────────────────────────
+  items: [contentItemSchema],
+  
+  // ── Legacy fields (kept for backward compat + video tracking) ────────────
+  type:         { type: String, enum: ['video','file'], default: 'video' },
+  videoUrl:     { type: String, default: null, trim: true },
+  duration:     { type: String, default: null },
+  thumbnailUrl: { type: String, default: null },
+  fileUrl:      { type: String, default: null },
+  fileType:     { type: String, default: null },
+  fileSize:     { type: String, default: null },
+  uploadedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+
+  // ── Sequential unlocking fields (Saved from your old code) ────────────────
+  requirePreviousLesson: { type: Boolean, default: false },
+  previousLesson:        { type: mongoose.Schema.Types.ObjectId, ref: 'Lesson', default: null },
+
+}, { timestamps: true });
+
+lessonSchema.index({ academicYear: 1, order: 1 });
 lessonSchema.index({ academicYear: 1, published: 1 });
 
 module.exports = mongoose.model('Lesson', lessonSchema);
