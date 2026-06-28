@@ -31,20 +31,14 @@ const accountRoutes     = require('./routes/account.routes');
 const app = express();
 
 // ── Security ──────────────────────────────────────────────────────────────────
-// 💡 تعديل هام: ضبط Helmet ليسمح بالاتصال الخارجي ومشاركة موارد الـ PWA بشكل آمن دون حظر الـ Cookies
-app.use(helmet({
-  crossOriginResourcePolicy: { policy: "cross-origin" },
-  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" }
-}));
+app.use(helmet());
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-// 💡 التعديل الساحر هنا: إضافة الـ Headers اللازمة للسماح بمرور الـ Cookies عبر المتصفح دون حظرها من الـ Preflight (OPTIONS)
 app.use(cors({
   origin:         CLIENT_URL,
   credentials:    true,
   methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Cookie'],
-  exposedHeaders: ['Set-Cookie']
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
@@ -91,7 +85,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authLimiter, authRoutes);
 
 // Teacher-only routes (protect + isTeacher applied per-router or per-route)
-app.use('/api/students',    protect, isTeacher, studentRoutes);
+app.use('/api/students',   protect, isTeacher, studentRoutes);
 app.use('/api/groups',     protect, isTeacher, groupRoutes);
 
 // الروتس المشتركة والمحمية بـ protect المرتبة والمدعومة بالتحديثات الجديدة
