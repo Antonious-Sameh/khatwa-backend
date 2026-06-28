@@ -15,6 +15,8 @@ const {
   createPaperExam,
   bulkPaperGrades,
   deletePaperExam,
+  getExamRankings, 
+  getExamGrades,
 } = require('../controllers/grade.controller');
 
 const { isTeacher }  = require('../middleware/auth.middleware');
@@ -25,6 +27,8 @@ const {
 
 // GET /api/grades/rankings?year=     ← must be before /:id
 router.get('/rankings', getRankings);
+
+router.get('/exam-rankings', getExamRankings);
 
 // GET /api/grades/student/:studentId
 router.get('/student/:studentId', getStudentGrades);

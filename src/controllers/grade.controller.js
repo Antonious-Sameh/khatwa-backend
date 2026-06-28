@@ -430,6 +430,70 @@ const deletePaperExam = asyncHandler(async (req, res) => {
   return success(res, {}, 'تم حذف الامتحان الورقي وجميع درجاته');
 });
 
+// ── GET /api/grades/exam-rankings?year=&examId=&examType=&examTitle= ──────────
+// Rank students by their score in ONE specific exam
+const getExamRankings = asyncHandler(async (req, res) => {
+  const { year, examId, examType, examTitle } = req.query;
+
+  if (!year) return error(res, 'السنة الدراسية مطلوبة', 400);
+
+  const students = await User
+    .find({ role: 'student', academicYear: year, isActive: true })
+    .select('_id name codePlain group')
+    .populate('group', 'name')
+    .lean();
+
+  const scoreMap = new Map();
+
+  if (examType === 'electronic' && examId) {
+    // Electronic: read from ExamSubmission
+    const examObjId = new mongoose.Types.ObjectId(examId);
+    const exam      = await Exam.findById(examObjId).select('maxScore title').lean();
+    const subs      = await ExamSubmission.find({ exam: examObjId }).select('student score percentage').lean();
+
+    subs.forEach(s => scoreMap.set(s.student.toString(), { score: s.score, maxScore: exam?.maxScore || 0, percentage: s.percentage || 0 }));
+
+  } else if (examType === 'paper' && examTitle) {
+    // Paper: read from Grade model
+    const grades = await Grade.find({ examType: 'paper', exam: null, examTitle }).lean();
+
+    grades.forEach(g => scoreMap.set(g.student.toString(), { score: g.score || 0, maxScore: g.maxScore || 0, percentage: g.maxScore > 0 ? Math.round((g.score/g.maxScore)*100) : 0 }));
+  }
+
+  const ranked = students
+    .map(s => ({
+      student:    { _id: s._id, name: s.name, codePlain: s.codePlain, group: s.group },
+      score:      scoreMap.get(s._id.toString())?.score      ?? null,
+      maxScore:   scoreMap.get(s._id.toString())?.maxScore   ?? 0,
+      percentage: scoreMap.get(s._id.toString())?.percentage ?? 0,
+      entered:    scoreMap.has(s._id.toString()),
+    }))
+    .sort((a, b) => {
+      // Students without score go to the bottom
+      if (!a.entered && !b.entered) return 0;
+      if (!a.entered) return 1;
+      if (!b.entered) return -1;
+      // Sort by score desc
+      return b.score - a.score;
+    });
+
+  let rank = 1;
+  ranked.forEach((r, i) => {
+    if (!r.entered) { r.rank = null; return; }
+    // Tie-breaker: same score = same rank
+    if (i > 0 && ranked[i-1].entered && r.score < ranked[i-1].score) {
+      rank = i + 1;
+    }
+    r.rank = rank;
+  });
+
+  return success(res, { year, examType, total: ranked.length, rankings: ranked });
+});
+
+
+  getExamRankings,
+
+
 module.exports = {
   getExamGrades,
   enterGrade,
@@ -442,4 +506,5 @@ module.exports = {
   createPaperExam,
   bulkPaperGrades,
   deletePaperExam,
+  getExamRankings,
 };
