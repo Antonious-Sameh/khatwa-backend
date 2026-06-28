@@ -16,7 +16,6 @@ const {
   bulkPaperGrades,
   deletePaperExam,
   getExamRankings, 
-  getExamGrades,
 } = require('../controllers/grade.controller');
 
 const { isTeacher }  = require('../middleware/auth.middleware');
