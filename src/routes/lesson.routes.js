@@ -7,7 +7,7 @@ const {
   addItem, uploadItemFile, updateItem, deleteItem, reorderItems,
 } = require('../controllers/lesson.controller');
 
-const { uploadAnswerSheet } = require('../config/multer'); // إعادة استخدام مولتر لرفع الصور والـ PDF
+const { uploadLessonFile } = require('../config/multer');
 const { protect, isTeacher, isStudent } = require('../middleware/auth.middleware');
 
 // Teacher routes (protect applied in app.js)
@@ -20,7 +20,7 @@ router.patch('/:id/publish',     isTeacher, togglePublish);
 router.patch('/reorder',         isTeacher, reorderLessons);
 router.get('/:id/viewers',       isTeacher, getViewers);
 router.post('/:id/items',               isTeacher, addItem);
-router.post('/:id/items/upload',        isTeacher, uploadAnswerSheet.single('file'), uploadItemFile);
+router.post('/:id/items/upload',        isTeacher, uploadLessonFile.single('file'), uploadItemFile);
 router.patch('/:id/items/reorder',      isTeacher, reorderItems);
 router.patch('/:id/items/:itemId',      isTeacher, updateItem);
 router.delete('/:id/items/:itemId',     isTeacher, deleteItem);

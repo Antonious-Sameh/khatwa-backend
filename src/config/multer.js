@@ -76,4 +76,31 @@ const uploadAnswerSheet = multer({
   },
 });
 
-module.exports = { cloudinary, uploadAvatar, uploadPDF, uploadHero, uploadAnswerSheet };
+// ── Lesson content files (images + PDF) ──────────────────────────────────────
+const uploadLessonFile = multer({
+  storage: new CloudinaryStorageEngine({
+    params: (req, file) => {
+      const isPdf = file.mimetype === 'application/pdf';
+      return {
+        folder:          isPdf ? 'khatwa-plus/lesson-pdfs' : 'khatwa-plus/lesson-images',
+        allowed_formats: isPdf ? ['pdf'] : ['jpg','jpeg','png','webp','gif'],
+        resource_type:   isPdf ? 'raw' : 'image',
+      };
+    },
+  }),
+  limits: { fileSize: 4 * 1024 * 1024 }, // 4MB max
+  fileFilter: (req, file, cb) => {
+    const allowed = ['application/pdf','image/jpeg','image/jpg','image/png','image/webp','image/gif'];
+    if (allowed.includes(file.mimetype)) return cb(null, true);
+    cb(new Error('الملف يجب أن يكون صورة أو PDF'));
+  },
+});
+
+module.exports = { 
+  cloudinary, 
+  uploadAvatar, 
+  uploadPDF, 
+  uploadHero, 
+  uploadAnswerSheet, 
+  uploadLessonFile // ضفنا المحرك الجديد هنا
+};

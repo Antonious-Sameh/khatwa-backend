@@ -13,7 +13,7 @@ const errorHandler = (err, req, res, next) => {
     statusCode = 409;
     const field = Object.keys(err.keyValue || {})[0] || 'field';
     const value = err.keyValue?.[field];
-    message = `هذا ${field === 'codePlain' ? 'الكود' : 'الحقل'} مستخدم بالفعل: ${value}`;
+    message = `هذا ${field === 'codePlain' ? 'الكود' : 'الحقل'} مستخدم بالفعل${value !== undefined && value !== null ? ': ' + value : ''}`;
   }
 
   // ── Mongoose: validation error ───────────────────────────────────────────

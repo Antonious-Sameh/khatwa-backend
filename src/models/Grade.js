@@ -44,13 +44,21 @@ const gradeSchema = new mongoose.Schema(
 );
 
 // ── Indexes ───────────────────────────────────────────────────────────────────
-// One grade per student per exam
-// Unique only for electronic exams (exam != null)
-gradeSchema.index({ student: 1, exam: 1, examType: 1 });
+// Unique index ONLY for electronic grades (exam != null)
+// Using partialFilterExpression so null exam values are excluded from uniqueness
+gradeSchema.index(
+  { student: 1, exam: 1 },
+  { unique: true, partialFilterExpression: { exam: { $type: 'objectId' } } }
+);
+
 // Fast lookup: all grades for an exam (for grade sheet)
 gradeSchema.index({ exam: 1 });
+
 // Fast lookup: all grades for a student
 gradeSchema.index({ student: 1 });
+
+// Fast lookup: paper exam grades by title
+gradeSchema.index({ examType: 1, examTitle: 1 });
 
 // ── Validate score ≤ exam maxScore ────────────────────────────────────────────
 gradeSchema.pre('save', async function (next) {
