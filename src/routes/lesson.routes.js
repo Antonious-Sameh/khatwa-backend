@@ -12,12 +12,12 @@ const { protect, isTeacher, isStudent } = require('../middleware/auth.middleware
 
 // Teacher routes (protect applied in app.js)
 router.get('/',                  getLessons);
+router.patch('/reorder',         isTeacher, reorderLessons); // حركنا دي هنا فوق الـ id: لضمان عدم حدوث تعارض
 router.get('/:id',               getLesson);
 router.post('/',                 isTeacher, createLesson);
 router.put('/:id',               isTeacher, updateLesson);
 router.delete('/:id',            isTeacher, deleteLesson);
 router.patch('/:id/publish',     isTeacher, togglePublish);
-router.patch('/reorder',         isTeacher, reorderLessons);
 router.get('/:id/viewers',       isTeacher, getViewers);
 router.post('/:id/items',               isTeacher, addItem);
 router.post('/:id/items/upload',        isTeacher, uploadLessonFile.single('file'), uploadItemFile);

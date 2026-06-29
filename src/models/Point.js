@@ -29,7 +29,7 @@ const pointSchema = new mongoose.Schema(
     reason: {
       type:      String,
       trim:      true,
-      required:  [true, 'سبب النقاط مطلوب'],
+      default:   null, // بقا اختياري وبياخد null لو سيبناه فاضي
       maxlength: [200, 'السبب طويل جداً'],
     },
 

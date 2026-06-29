@@ -189,10 +189,34 @@ const getMyPoints = asyncHandler(async (req, res) => {
     },
   ]);
 
+  // Also compute rank in leaderboard
+  const allStudents = await User.find({ 
+    role: 'student', 
+    academicYear: (await User.findById(studentId).select('academicYear').lean())?.academicYear, 
+    isActive: true 
+  }).select('_id').lean();
+
+  const allBalances = await Point.aggregate([
+    { $match: { student: { $in: allStudents.map(s => s._id) } } },
+    { $group: { _id: '$student', bal: { $sum: { $cond: [{ $eq: ['$type', 'add'] }, '$amount', { $multiply: ['$amount', -1] }] } } } },
+  ]);
+
+  const balMap = new Map(allBalances.map(r => [r._id.toString(), r.bal]));
+  const sorted = allStudents.map(s => ({ id: s._id.toString(), bal: balMap.get(s._id.toString()) || 0 })).sort((a, b) => b.bal - a.bal);
+
+  let myRank = null;
+  let curRank = 1;
+  sorted.forEach((r, i) => { 
+    if (i > 0 && r.bal < sorted[i - 1].bal) curRank = i + 1; 
+    if (r.id === studentId.toString()) myRank = curRank; 
+  });
+
   return success(res, {
     balance:      balanceAgg[0]?.balance || 0,
     transactions,
     pagination: { total, page: Number(page), limit: Number(limit), pages: Math.ceil(total / Number(limit)) },
+    rank:  myRank,
+    outOf: allStudents.length,
   });
 });
 
