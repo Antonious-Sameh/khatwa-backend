@@ -9,7 +9,6 @@ const Payment   = require('../models/Payment');
 const Grade     = require('../models/Grade');
 const Lesson    = require('../models/Lesson');
 const WatchLog  = require('../models/WatchLog');
-const ExamSubmission = require('../models/ExamSubmission');
 const Note      = require('../models/Note');
 const Point     = require('../models/Point');
 const Exam           = require('../models/Exam');
