@@ -19,12 +19,14 @@ const buildStudentReport = async (student) => {
     grades,
     pointsBalance,
     rank,
+    pointsRank,
   ] = await Promise.all([
     getAttendanceStats(studentId),
     getPaymentSummary(studentId),
     getGrades(studentId),
     getPointsBalance(studentId),
     getStudentRank(student),
+    getStudentPointsRank(student),
   ]);
 
   return {
@@ -45,6 +47,7 @@ const buildStudentReport = async (student) => {
     grades,
     points:        pointsBalance,
     rank,
+    pointsRank,
     generatedAt:   new Date().toISOString(),
   };
 };
@@ -198,6 +201,66 @@ const getStudentRank = async (student) => {
     };
   } catch {
     return { rank: null, totalScore: 0, outOf: 0 };
+  }
+};
+
+// ── Points-based rank in academic year ────────────────────────────────────────
+// (separate from getStudentRank, which ranks by exam grades)
+const getStudentPointsRank = async (student) => {
+  try {
+    const Point = mongoose.model('Point');
+    const User  = mongoose.model('User');
+
+    const peers = await User.find({
+      role:         'student',
+      academicYear: student.academicYear,
+      isActive:     true,
+    }).select('_id').lean();
+
+    const peerIds = peers.map((p) => p._id);
+
+    const balances = await Point.aggregate([
+      { $match: { student: { $in: peerIds } } },
+      {
+        $group: {
+          _id:     '$student',
+          balance: {
+            $sum: {
+              $cond: [
+                { $eq: ['$type', 'add'] },
+                '$amount',
+                { $multiply: ['$amount', -1] },
+              ],
+            },
+          },
+        },
+      },
+    ]);
+
+    const balMap = new Map(balances.map((b) => [b._id.toString(), b.balance]));
+
+    const sorted = peers
+      .map((p) => ({ id: p._id.toString(), balance: balMap.get(p._id.toString()) || 0 }))
+      .sort((a, b) => b.balance - a.balance);
+
+    let rank = 1;
+    let myRank = null;
+    let myBalance = 0;
+    sorted.forEach((r, i) => {
+      if (i > 0 && r.balance < sorted[i - 1].balance) rank = i + 1;
+      if (r.id === student._id.toString()) {
+        myRank = rank;
+        myBalance = r.balance;
+      }
+    });
+
+    return {
+      rank:    myRank,
+      balance: myBalance,
+      outOf:   peers.length,
+    };
+  } catch {
+    return { rank: null, balance: 0, outOf: 0 };
   }
 };
 

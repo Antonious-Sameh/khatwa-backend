@@ -17,7 +17,8 @@ router.post('/',       isTeacher, createExam);
 router.put('/:id',     isTeacher, updateExam);
 router.delete('/:id',  isTeacher, deleteExam);
 router.patch('/:id/status', isTeacher, changeStatus);
-router.post('/:id/answer-sheet',   isTeacher, uploadAnswerSheet.single('answerSheet'), uploadAnswerSheetCtrl);
+router.post('/:id/answer-sheet',   isTeacher, uploadAnswerSheet.array('answerSheets', 10), uploadAnswerSheetCtrl);
+router.delete('/:id/answer-sheet/:sheetId', isTeacher, deleteAnswerSheet);
 router.delete('/:id/answer-sheet', isTeacher, deleteAnswerSheet);
 
 // مسارات رفع وحذف ملف الامتحان الورقي الجديدة

@@ -96,11 +96,11 @@ const uploadLessonFile = multer({
   },
 });
 
-module.exports = { 
-  cloudinary, 
-  uploadAvatar, 
-  uploadPDF, 
-  uploadHero, 
-  uploadAnswerSheet, 
+module.exports = {
+  cloudinary,
+  uploadAvatar,
+  uploadPDF,
+  uploadHero,
+  uploadAnswerSheet,
   uploadLessonFile // ضفنا المحرك الجديد هنا
 };

@@ -29,9 +29,16 @@ const examSchema = new mongoose.Schema({
   paperFileUrl:  { type: String, default: null }, // PDF or image of the exam paper
   paperFileType: { type: String, enum: ['image','pdf',null], default: null },
 
-  // Answer sheet (both types)
+  // Answer sheet (both types) — legacy single-file fields kept for backward compatibility
   answerSheetUrl:  { type: String, default: null },
   answerSheetType: { type: String, enum: ['image','pdf',null], default: null },
+
+  // Multiple answer sheets (new) — teacher can attach several PDFs/images
+  answerSheets: [{
+    url:        { type: String, required: true },
+    type:       { type: String, enum: ['image','pdf'], required: true },
+    uploadedAt: { type: Date, default: Date.now },
+  }],
 
   createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
 }, { timestamps: true });

@@ -105,12 +105,12 @@ const deleteExam = asyncHandler(async (req, res) => {
   const exam = await Exam.findById(req.params.id);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  // Delete answer sheet from Cloudinary
-  if (exam.answerSheetUrl) {
+  // Delete answer sheet(s) from Cloudinary
+  for (const sheet of (exam.answerSheets && exam.answerSheets.length ? exam.answerSheets : (exam.answerSheetUrl ? [{ url: exam.answerSheetUrl, type: exam.answerSheetType }] : []))) {
     try {
-      const parts = exam.answerSheetUrl.split('/');
+      const parts = sheet.url.split('/');
       const pubId = 'khatwa-plus/files/' + parts[parts.length-1].split('.')[0];
-      await cloudinary.uploader.destroy(pubId, { resource_type: exam.answerSheetType === 'pdf' ? 'raw' : 'image' });
+      await cloudinary.uploader.destroy(pubId, { resource_type: sheet.type === 'pdf' ? 'raw' : 'image' });
     } catch {}
   }
 
@@ -129,46 +129,74 @@ const changeStatus = asyncHandler(async (req, res) => {
 });
 
 // ── POST /api/exams/:id/answer-sheet ─────────────────────────────────────────
-// Teacher uploads PDF or image answer sheet
+// Teacher uploads one or more PDF/image answer sheets.
+// Existing answer sheets are kept — new files are appended, not replaced.
 const uploadAnswerSheet = asyncHandler(async (req, res) => {
-  if (!req.file) return apiError(res, 'لم يتم رفع ملف', 400);
+  const files = req.files && req.files.length ? req.files : (req.file ? [req.file] : []);
+  if (!files.length) return apiError(res, 'لم يتم رفع أي ملف', 400);
 
   const exam = await Exam.findById(req.params.id);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  // Delete old answer sheet
-  if (exam.answerSheetUrl) {
-    try {
-      const parts = exam.answerSheetUrl.split('/');
-      const pubId = 'khatwa-plus/files/' + parts[parts.length-1].split('.')[0];
-      await cloudinary.uploader.destroy(pubId, { resource_type: 'raw' });
-    } catch {}
-  }
+  const newSheets = files.map((f) => ({
+    url:  f.path,
+    type: f.mimetype === 'application/pdf' ? 'pdf' : 'image',
+  }));
 
-  const fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'image';
-  exam.answerSheetUrl  = req.file.path;
-  exam.answerSheetType = fileType;
+  exam.answerSheets = [...(exam.answerSheets || []), ...newSheets];
+
+  // Keep legacy single-file fields in sync (point to the most recent sheet)
+  const last = exam.answerSheets[exam.answerSheets.length - 1];
+  exam.answerSheetUrl  = last.url;
+  exam.answerSheetType = last.type;
+
   await exam.save();
 
-  return success(res, { answerSheetUrl: exam.answerSheetUrl, answerSheetType: fileType }, 'تم رفع نموذج الإجابة بنجاح');
+  return success(res, { answerSheets: exam.answerSheets }, 'تم رفع نموذج الإجابة بنجاح');
 });
 
-// ── DELETE /api/exams/:id/answer-sheet ───────────────────────────────────────
+// ── DELETE /api/exams/:id/answer-sheet/:sheetId ──────────────────────────────
+// Deletes a single answer sheet by its sub-document id.
 const deleteAnswerSheet = asyncHandler(async (req, res) => {
   const exam = await Exam.findById(req.params.id);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  if (exam.answerSheetUrl) {
-    try {
-      const parts = exam.answerSheetUrl.split('/');
-      const pubId = 'khatwa-plus/files/' + parts[parts.length-1].split('.')[0];
-      await cloudinary.uploader.destroy(pubId, { resource_type: exam.answerSheetType === 'pdf' ? 'raw' : 'image' });
-    } catch {}
+  const { sheetId } = req.params;
+
+  // Backward-compat: no sheetId provided → clear everything (old behaviour)
+  if (!sheetId) {
+    for (const sheet of (exam.answerSheets || [])) {
+      try {
+        const parts = sheet.url.split('/');
+        const pubId = 'khatwa-plus/files/' + parts[parts.length - 1].split('.')[0];
+        await cloudinary.uploader.destroy(pubId, { resource_type: sheet.type === 'pdf' ? 'raw' : 'image' });
+      } catch {}
+    }
+    exam.answerSheets    = [];
+    exam.answerSheetUrl  = null;
+    exam.answerSheetType = null;
+    await exam.save();
+    return success(res, {}, 'تم حذف كل نماذج الإجابة');
   }
-  exam.answerSheetUrl  = null;
-  exam.answerSheetType = null;
+
+  const sheet = exam.answerSheets.id(sheetId);
+  if (!sheet) return notFound(res, 'نموذج الإجابة غير موجود');
+
+  try {
+    const parts = sheet.url.split('/');
+    const pubId = 'khatwa-plus/files/' + parts[parts.length - 1].split('.')[0];
+    await cloudinary.uploader.destroy(pubId, { resource_type: sheet.type === 'pdf' ? 'raw' : 'image' });
+  } catch {}
+
+  exam.answerSheets.pull(sheetId);
+
+  // Keep legacy fields in sync
+  const last = exam.answerSheets[exam.answerSheets.length - 1] || null;
+  exam.answerSheetUrl  = last?.url  || null;
+  exam.answerSheetType = last?.type || null;
+
   await exam.save();
-  return success(res, {}, 'تم حذف نموذج الإجابة');
+  return success(res, { answerSheets: exam.answerSheets }, 'تم حذف نموذج الإجابة');
 });
 
 // ── POST /api/exams/:id/submit (student) ─────────────────────────────────────
