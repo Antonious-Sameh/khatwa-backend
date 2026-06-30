@@ -106,14 +106,30 @@ const getMyPayments = asyncHandler(async (req, res) => {
 const getMyGrades = asyncHandler(async (req, res) => {
   const studentId = req.user.userId;
 
-  // ── 1. الدرجات اليدوية التي أدخلها المدرس ───────────────────────────────────
-  const manualGrades = await Grade
+  // ── 1. Manual grades entered by teacher (electronic-exam manual entries + paper exams) ──
+  const manualGradesRaw = await Grade
     .find({ student: studentId })
     .populate('exam', 'title maxScore examDate academicYear status')
     .sort({ createdAt: -1 })
     .lean();
 
-  // ── 2. الامتحانات الإلكترونية المصححة تلقائياً (MCQ exams) ────────────────────────────────
+  // توحيد شكل البيانات للامتحانات الورقية والإلكترونية المدخلة يدويًا
+  const manualGrades = manualGradesRaw.map(g => {
+    const isPaper = g.examType === 'paper' || !g.exam;
+    return {
+      _id:        g._id,
+      title:      isPaper ? (g.examTitle || 'امتحان ورقي') : (g.exam?.title || 'امتحان'),
+      examType:   isPaper ? 'paper' : 'electronic',
+      score:      g.score,
+      maxScore:   isPaper ? (g.maxScore || 0) : (g.exam?.maxScore || 0),
+      examDate:   g.exam?.examDate || null,
+      note:       g.note || null,
+      isAuto:     false,
+      createdAt:  g.createdAt,
+    };
+  });
+
+  // ── 2. Auto-graded submissions (electronic exams, MCQ) ────────────────────
   const ExamSubmission = mongoose.model('ExamSubmission');
   const submissions = await ExamSubmission
     .find({ student: studentId })
@@ -121,25 +137,28 @@ const getMyGrades = asyncHandler(async (req, res) => {
     .sort({ submittedAt: -1 })
     .lean();
 
-  // عمل Set بـ ID الامتحانات المغطاة بالفعل في الدرجات اليدوية لمنع التكرار
-  const manualExamIds = new Set(manualGrades.map(g => g.exam?._id?.toString()));
+  // بناء قائمة بالـ IDs لمنع تكرار الامتحانات المدخلة يدويًا مع التلقائية
+  const manualExamIds = new Set(
+    manualGradesRaw.filter(g => g.exam).map(g => g.exam._id.toString())
+  );
 
-  // تحويل التسليمات الإلكترونية إلى كائنات تشبه الـ Grade مع تخطي المكرر يدوياً
   const autoGrades = submissions
     .filter(s => s.exam && !manualExamIds.has(s.exam._id.toString()))
     .map(s => ({
-      _id:    s._id,
-      student: studentId,
-      exam:   s.exam,
-      score:  s.score,
-      note:   null,
-      isAuto: true,                     // علامة تدل على أنها تصحيح تلقائي
+      _id:        s._id,
+      title:      s.exam?.title || 'امتحان',
+      examType:   'electronic',
+      score:      s.score,
+      maxScore:   s.exam?.maxScore || 0,
+      examDate:   s.exam?.examDate || null,
+      note:       null,
+      isAuto:     true,
       percentage: s.percentage,
       submittedAt: s.submittedAt,
-      createdAt: s.submittedAt,
+      createdAt:  s.submittedAt,
     }));
 
-  // ── 3. دمج النوعين معاً — والترتيب حسب التاريخ من الأحدث للأقدم ─────────────────────────────────────
+  // ── 3. Merge both — sort by date desc ─────────────────────────────────────
   const allGrades = [...manualGrades, ...autoGrades]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
