@@ -107,12 +107,43 @@ const updateLesson = asyncHandler(async (req, res) => {
   return success(res, { lesson }, 'تم تعديل الدرس بنجاح');
 });
 
+
 // ── DELETE /api/lessons/:id ───────────────────────────────────────────────────
 const deleteLesson = asyncHandler(async (req, res) => {
-  const lesson = await Lesson.findById(req.params.id);
+  const { id } = req.params;
+
+  // 1. التحقق من صحة معرف المونجو (ObjectId) لمنع الكراش
+  if (!id || !id.match(/^[0-9a-fA-F]{24}$/)) {
+    return res.status(400).json({ success: false, message: 'معرف الدرس غير صحيح' });
+  }
+
+  const lesson = await Lesson.findById(id);
   if (!lesson) return notFound(res, 'الدرس غير موجود');
+
+  // 2. تنظيف ملفات Cloudinary المرتبطة بالعناصر (الصور والملفات) تلقائياً
+  if (lesson.items?.length) {
+    const { cloudinary } = require('../config/multer');
+    for (const item of lesson.items) {
+      const url = item.imageUrl || item.pdfUrl;
+      if (!url) continue;
+      try {
+        const parts = url.split('/');
+        // استخراج الـ public_id الخاص بالملف من الرابط
+        const pubId = parts[parts.length - 2] + '/' + parts[parts.length - 1].split('.')[0];
+        await cloudinary.uploader.destroy(pubId, { resource_type: item.pdfUrl ? 'raw' : 'image' });
+      } catch (e) {
+        // حتى لو فشل حذف الملف من السيرفر، مش بنعطل عملية مسح الدرس الأساسية
+        console.error('Cloudinary cleanup failed for item:', e.message);
+      }
+    }
+  }
+
+  // 3. حذف سجلات المشاهدة المرتبطة بالدرس
   await WatchLog.deleteMany({ lesson: lesson._id });
-  await lesson.deleteOne();
+
+  // 4. حذف مستند الدرس نفسه نهائياً
+  await Lesson.deleteOne({ _id: lesson._id });
+
   return success(res, {}, 'تم حذف الدرس بنجاح');
 });
 
