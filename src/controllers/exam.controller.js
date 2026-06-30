@@ -7,6 +7,38 @@ const { cloudinary, uploadPDF } = require('../config/multer');
 const { success, created, notFound, error: apiError } = require('../utils/apiResponse');
 const { asyncHandler } = require('../middleware/error.middleware');
 
+// ── Helper: extract Cloudinary public_id from secure_url ─────────────────────
+// Cloudinary URL format: https://res.cloudinary.com/<cloud>/image/upload/v<ver>/<public_id>.<ext>
+// The public_id may contain slashes (folder/subfolder/filename).
+// We strip: protocol, host, resource_type, "upload", version segment, and extension.
+const extractPublicId = (url) => {
+  if (!url) return null;
+  try {
+    // Remove query string if any
+    const clean = url.split('?')[0];
+    // Split on '/upload/'
+    const uploadIdx = clean.indexOf('/upload/');
+    if (uploadIdx === -1) return null;
+    let after = clean.slice(uploadIdx + '/upload/'.length);
+    // Remove optional version prefix (v1234567/)
+    after = after.replace(/^v\d+\//, '');
+    // Remove file extension
+    after = after.replace(/\.[^/.]+$/, '');
+    return after;
+  } catch {
+    return null;
+  }
+};
+
+// ── Helper: delete a file from Cloudinary safely (never throws) ────────────
+const destroyFromCloudinary = async (url, resourceType = 'image') => {
+  const pubId = extractPublicId(url);
+  if (!pubId) return;
+  try {
+    await cloudinary.uploader.destroy(pubId, { resource_type: resourceType });
+  } catch {}
+};
+
 // ── GET /api/exams?year=&status= ──────────────────────────────────────────────
 const getExams = asyncHandler(async (req, res) => {
   const { year, status } = req.query;
@@ -107,11 +139,7 @@ const deleteExam = asyncHandler(async (req, res) => {
 
   // Delete answer sheet(s) from Cloudinary
   for (const sheet of (exam.answerSheets && exam.answerSheets.length ? exam.answerSheets : (exam.answerSheetUrl ? [{ url: exam.answerSheetUrl, type: exam.answerSheetType }] : []))) {
-    try {
-      const parts = sheet.url.split('/');
-      const pubId = 'khatwa-plus/files/' + parts[parts.length-1].split('.')[0];
-      await cloudinary.uploader.destroy(pubId, { resource_type: sheet.type === 'pdf' ? 'raw' : 'image' });
-    } catch {}
+    await destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image');
   }
 
   await ExamSubmission.deleteMany({ exam: exam._id });
@@ -166,11 +194,7 @@ const deleteAnswerSheet = asyncHandler(async (req, res) => {
   // Backward-compat: no sheetId provided → clear everything (old behaviour)
   if (!sheetId) {
     for (const sheet of (exam.answerSheets || [])) {
-      try {
-        const parts = sheet.url.split('/');
-        const pubId = 'khatwa-plus/files/' + parts[parts.length - 1].split('.')[0];
-        await cloudinary.uploader.destroy(pubId, { resource_type: sheet.type === 'pdf' ? 'raw' : 'image' });
-      } catch {}
+      await destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image');
     }
     exam.answerSheets    = [];
     exam.answerSheetUrl  = null;
@@ -182,11 +206,7 @@ const deleteAnswerSheet = asyncHandler(async (req, res) => {
   const sheet = exam.answerSheets.id(sheetId);
   if (!sheet) return notFound(res, 'نموذج الإجابة غير موجود');
 
-  try {
-    const parts = sheet.url.split('/');
-    const pubId = 'khatwa-plus/files/' + parts[parts.length - 1].split('.')[0];
-    await cloudinary.uploader.destroy(pubId, { resource_type: sheet.type === 'pdf' ? 'raw' : 'image' });
-  } catch {}
+  await destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image');
 
   exam.answerSheets.pull(sheetId);
 
@@ -294,11 +314,7 @@ const uploadPaperFile = asyncHandler(async (req, res) => {
 
   // Delete old paper file if exists from Cloudinary
   if (exam.paperFileUrl) {
-    try {
-      const parts = exam.paperFileUrl.split('/');
-      const pubId = parts[parts.length-2] + '/' + parts[parts.length-1].split('.')[0];
-      await cloudinary.uploader.destroy(pubId, { resource_type: exam.paperFileType === 'pdf' ? 'raw' : 'image' });
-    } catch {}
+    await destroyFromCloudinary(exam.paperFileUrl, exam.paperFileType === 'pdf' ? 'raw' : 'image');
   }
 
   const fileType = req.file.mimetype === 'application/pdf' ? 'pdf' : 'image';
@@ -315,11 +331,7 @@ const deletePaperFile = asyncHandler(async (req, res) => {
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
   if (exam.paperFileUrl) {
-    try {
-      const parts = exam.paperFileUrl.split('/');
-      const pubId = parts[parts.length-2] + '/' + parts[parts.length-1].split('.')[0];
-      await cloudinary.uploader.destroy(pubId, { resource_type: exam.paperFileType === 'pdf' ? 'raw' : 'image' });
-    } catch {}
+    await destroyFromCloudinary(exam.paperFileUrl, exam.paperFileType === 'pdf' ? 'raw' : 'image');
   }
 
   exam.paperFileUrl = null; 

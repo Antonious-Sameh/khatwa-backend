@@ -66,12 +66,16 @@ const generateTokenPair = (user) => {
 /**
  * Sets the refresh token as an httpOnly cookie.
  * Keeps it out of JS reach → XSS safe.
+ *
+ * For cross-origin deployments (frontend on Vercel, backend elsewhere),
+ * sameSite MUST be 'none' + secure:true. 'strict' blocks cross-origin cookies entirely.
  */
 const setRefreshCookie = (res, refreshToken) => {
+  const isProd = process.env.NODE_ENV === 'production';
   res.cookie('refreshToken', refreshToken, {
     httpOnly: true,
-    secure:   process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure:   isProd,                    // must be true when sameSite=none
+    sameSite: isProd ? 'none' : 'lax',  // none = allow cross-origin; lax = safe for local dev
     maxAge:   30 * 24 * 60 * 60 * 1000, // 30 days in ms
   });
 };
@@ -80,10 +84,11 @@ const setRefreshCookie = (res, refreshToken) => {
  * Clears the refresh token cookie on logout.
  */
 const clearRefreshCookie = (res) => {
+  const isProd = process.env.NODE_ENV === 'production';
   res.clearCookie('refreshToken', {
     httpOnly: true,
-    secure:   process.env.NODE_ENV === 'production',
-    sameSite: 'strict',
+    secure:   isProd,
+    sameSite: isProd ? 'none' : 'lax',
   });
 };
 
