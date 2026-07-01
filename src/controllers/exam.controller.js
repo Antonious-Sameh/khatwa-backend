@@ -34,8 +34,14 @@ const extractPublicId = (url) => {
 const destroyFromCloudinary = async (url, resourceType = 'image') => {
   const pubId = extractPublicId(url);
   if (!pubId) return;
+  // Try with the given type first, then fall back to 'raw' for old files
+  // uploaded before we switched to resource_type: 'auto'
   try {
-    await cloudinary.uploader.destroy(pubId, { resource_type: resourceType });
+    const result = await cloudinary.uploader.destroy(pubId, { resource_type: resourceType });
+    if (result.result === 'not found') {
+      // Old file stored as 'raw' — try again
+      await cloudinary.uploader.destroy(pubId, { resource_type: 'raw' });
+    }
   } catch {}
 };
 

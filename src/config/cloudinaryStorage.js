@@ -45,6 +45,7 @@ CloudinaryStorageEngine.prototype._handleFile = function (req, file, cb) {
     resource_type:   params.resource_type   || 'auto',
     allowed_formats: params.allowed_formats || undefined,
     transformation:  params.transformation  || undefined,
+    access_mode:     params.access_mode     || 'public',  // always public for CORS
     use_filename:    false,
     unique_filename: true,
   };

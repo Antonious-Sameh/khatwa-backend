@@ -26,9 +26,9 @@ const uploadAvatar = multer({
 const uploadPDF = multer({
   storage: new CloudinaryStorageEngine({
     params: {
-      folder:          'khatwa-plus/pdfs',
-      allowed_formats: ['pdf'],
-      resource_type:   'raw',
+      folder:        'khatwa-plus/pdfs',
+      resource_type: 'auto',   // auto so Cloudinary serves with CORS headers
+      access_mode:   'public',
     },
   }),
   limits: { fileSize: 4 * 1024 * 1024 }, // 4 MB (Vercel Free limit)
@@ -58,13 +58,13 @@ const uploadHero = multer({
 // ── Exam answer sheet (PDF or image) ─────────────────────────────────────────
 const uploadAnswerSheet = multer({
   storage: new CloudinaryStorageEngine({
-    // Dynamic params based on file type
+    // Use 'auto' for resource_type — Cloudinary auto-detects PDF as document type
+    // and serves it with proper CORS headers (unlike 'raw' which blocks cross-origin reads)
     params: (req, file) => {
-      const isPdf = file.mimetype === 'application/pdf';
       return {
         folder:          'khatwa-plus/answer-sheets',
-        allowed_formats: isPdf ? ['pdf'] : ['jpg', 'jpeg', 'png', 'webp'],
-        resource_type:   isPdf ? 'raw' : 'image',
+        resource_type:   'auto',   // auto = Cloudinary picks image/raw/video
+        access_mode:     'public', // ensure public CORS-accessible URL
       };
     },
   }),
@@ -82,9 +82,9 @@ const uploadLessonFile = multer({
     params: (req, file) => {
       const isPdf = file.mimetype === 'application/pdf';
       return {
-        folder:          isPdf ? 'khatwa-plus/lesson-pdfs' : 'khatwa-plus/lesson-images',
-        allowed_formats: isPdf ? ['pdf'] : ['jpg','jpeg','png','webp','gif'],
-        resource_type:   isPdf ? 'raw' : 'image',
+        folder:        isPdf ? 'khatwa-plus/lesson-pdfs' : 'khatwa-plus/lesson-images',
+        resource_type: 'auto',    // auto handles both PDF and image with CORS headers
+        access_mode:   'public',
       };
     },
   }),
