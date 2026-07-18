@@ -115,16 +115,19 @@ const getStudentPoints = asyncHandler(async (req, res) => {
   if (!student) return notFound(res, 'الطالب غير موجود');
 
   const skip  = (Number(page) - 1) * Number(limit);
-  const total = await Point.countDocuments({ student: studentId });
 
-  const transactions = await Point
-    .find({ student: studentId })
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(Number(limit))
-    .lean();
-
-  const balance = await calcBalance(studentId);
+  // These three queries are independent of each other — run them in
+  // parallel instead of awaiting one after another to cut response time.
+  const [total, transactions, balance] = await Promise.all([
+    Point.countDocuments({ student: studentId }),
+    Point
+      .find({ student: studentId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean(),
+    calcBalance(studentId),
+  ]);
 
   return success(res, {
     student: { _id: student._id, name: student.name, code: student.codePlain },

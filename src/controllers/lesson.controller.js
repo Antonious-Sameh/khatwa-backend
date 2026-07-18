@@ -120,29 +120,28 @@ const deleteLesson = asyncHandler(async (req, res) => {
   const lesson = await Lesson.findById(id);
   if (!lesson) return notFound(res, 'الدرس غير موجود');
 
-  // 2. تنظيف ملفات Cloudinary المرتبطة بالعناصر (الصور والملفات) تلقائياً
-  if (lesson.items?.length) {
+  // 2+3+4. تنظيف ملفات Cloudinary (لكل عنصر على حدة، أخطاء التنظيف لا تعطل الحذف)،
+  // حذف سجلات المشاهدة، وحذف الدرس نفسه — كلها عمليات مستقلة عن بعضها، فتُنفَّذ بالتوازي.
+  const cleanupTasks = (lesson.items?.length ? lesson.items : []).map(async (item) => {
+    const url = item.imageUrl || item.pdfUrl;
+    if (!url) return;
     const { cloudinary } = require('../config/multer');
-    for (const item of lesson.items) {
-      const url = item.imageUrl || item.pdfUrl;
-      if (!url) continue;
-      try {
-        const parts = url.split('/');
-        // استخراج الـ public_id الخاص بالملف من الرابط
-        const pubId = parts[parts.length - 2] + '/' + parts[parts.length - 1].split('.')[0];
-        await cloudinary.uploader.destroy(pubId, { resource_type: item.pdfUrl ? 'raw' : 'image' });
-      } catch (e) {
-        // حتى لو فشل حذف الملف من السيرفر، مش بنعطل عملية مسح الدرس الأساسية
-        console.error('Cloudinary cleanup failed for item:', e.message);
-      }
+    try {
+      const parts = url.split('/');
+      // استخراج الـ public_id الخاص بالملف من الرابط
+      const pubId = parts[parts.length - 2] + '/' + parts[parts.length - 1].split('.')[0];
+      await cloudinary.uploader.destroy(pubId, { resource_type: item.pdfUrl ? 'raw' : 'image' });
+    } catch (e) {
+      // حتى لو فشل حذف الملف من السيرفر، مش بنعطل عملية مسح الدرس الأساسية
+      console.error('Cloudinary cleanup failed for item:', e.message);
     }
-  }
+  });
 
-  // 3. حذف سجلات المشاهدة المرتبطة بالدرس
-  await WatchLog.deleteMany({ lesson: lesson._id });
-
-  // 4. حذف مستند الدرس نفسه نهائياً
-  await Lesson.deleteOne({ _id: lesson._id });
+  await Promise.all([
+    ...cleanupTasks,
+    WatchLog.deleteMany({ lesson: lesson._id }),
+    Lesson.deleteOne({ _id: lesson._id }),
+  ]);
 
   return success(res, {}, 'تم حذف الدرس بنجاح');
 });
@@ -232,13 +231,15 @@ const getViewers = asyncHandler(async (req, res) => {
   const lesson = await Lesson.findById(req.params.id).lean();
   if (!lesson) return notFound(res, 'الدرس غير موجود');
 
-  const students = await User
-    .find({ role: 'student', academicYear: lesson.academicYear, isActive: true })
-    .select('_id name codePlain')
-    .sort({ name: 1 })
-    .lean();
-
-  const logs = await WatchLog.find({ lesson: lesson._id }).lean();
+  // Students and watch logs are independent of each other — fetch both in parallel.
+  const [students, logs] = await Promise.all([
+    User
+      .find({ role: 'student', academicYear: lesson.academicYear, isActive: true })
+      .select('_id name codePlain')
+      .sort({ name: 1 })
+      .lean(),
+    WatchLog.find({ lesson: lesson._id }).lean(),
+  ]);
   const logMap = new Map();
   logs.forEach(l => logMap.set(l.student.toString(), l));
 

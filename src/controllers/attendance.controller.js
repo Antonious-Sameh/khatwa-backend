@@ -59,18 +59,19 @@ const getGroupSheet = asyncHandler(async (req, res) => {
   const grp = await Group.findById(groupId).lean();
   if (!grp) return notFound(res, 'المجموعة غير موجودة');
 
-  // Get all students in this group
-  const students = await User
-    .find({ group: groupId, role: 'student', isActive: true })
-    .select('_id name codePlain avatar')
-    .sort({ name: 1 })
-    .lean();
-
-  // Get existing attendance records for this date
-  const records = await Attendance
-    .find({ group: groupId, date })
-    .select('student status note')
-    .lean();
+  // Students list and existing attendance records are independent queries —
+  // run them in parallel instead of one after another.
+  const [students, records] = await Promise.all([
+    User
+      .find({ group: groupId, role: 'student', isActive: true })
+      .select('_id name codePlain avatar')
+      .sort({ name: 1 })
+      .lean(),
+    Attendance
+      .find({ group: groupId, date })
+      .select('student status note')
+      .lean(),
+  ]);
 
   // Map records by studentId for O(1) lookup
   const recordMap = {};
@@ -121,28 +122,31 @@ const getStudentHistory = asyncHandler(async (req, res) => {
   }
 
   const skip  = (Number(page) - 1) * Number(limit);
-  const total = await Attendance.countDocuments(filter);
 
-  const records = await Attendance
-    .find(filter)
-    .sort({ date: -1 })
-    .skip(skip)
-    .limit(Number(limit))
-    .select('date status note group')
-    .populate('group', 'name')
-    .lean();
-
-  // Summary stats (full history, not just current page)
-  const stats = await Attendance.aggregate([
-    { $match: { student: new mongoose.Types.ObjectId(studentId) } },
-    {
-      $group: {
-        _id:     null,
-        total:   { $sum: 1 },
-        present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
-        absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent']  }, 1, 0] } },
+  // total count, the paginated records, and the full-history stats are all
+  // independent of each other — run them in parallel instead of sequentially.
+  const [total, records, stats] = await Promise.all([
+    Attendance.countDocuments(filter),
+    Attendance
+      .find(filter)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .select('date status note group')
+      .populate('group', 'name')
+      .lean(),
+    // Summary stats (full history, not just current page)
+    Attendance.aggregate([
+      { $match: { student: new mongoose.Types.ObjectId(studentId) } },
+      {
+        $group: {
+          _id:     null,
+          total:   { $sum: 1 },
+          present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+          absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent']  }, 1, 0] } },
+        },
       },
-    },
+    ]),
   ]);
 
   const s = stats[0] || { total: 0, present: 0, absent: 0 };
@@ -181,43 +185,45 @@ const getGroupStats = asyncHandler(async (req, res) => {
     if (to)   matchStage.date.$lte = to;
   }
 
-  // Per-student stats
-  const perStudent = await Attendance.aggregate([
-    { $match: matchStage },
-    {
-      $group: {
-        _id:     '$student',
-        total:   { $sum: 1 },
-        present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
-        absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent']  }, 1, 0] } },
-      },
-    },
-    {
-      $lookup: {
-        from:         'users',
-        localField:   '_id',
-        foreignField: '_id',
-        as:           'studentData',
-        pipeline:     [{ $project: { name: 1, codePlain: 1 } }],
-      },
-    },
-    { $unwind: '$studentData' },
-    {
-      $project: {
-        student:    '$studentData',
-        total:      1,
-        present:    1,
-        absent:     1,
-        percentage: {
-          $round: [{ $multiply: [{ $divide: ['$present', '$total'] }, 100] }, 0],
+  // Per-student stats and the list of session dates are independent
+  // queries — run them in parallel instead of one after another.
+  const [perStudent, sessions] = await Promise.all([
+    Attendance.aggregate([
+      { $match: matchStage },
+      {
+        $group: {
+          _id:     '$student',
+          total:   { $sum: 1 },
+          present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+          absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent']  }, 1, 0] } },
         },
       },
-    },
-    { $sort: { percentage: -1 } },
+      {
+        $lookup: {
+          from:         'users',
+          localField:   '_id',
+          foreignField: '_id',
+          as:           'studentData',
+          pipeline:     [{ $project: { name: 1, codePlain: 1 } }],
+        },
+      },
+      { $unwind: '$studentData' },
+      {
+        $project: {
+          student:    '$studentData',
+          total:      1,
+          present:    1,
+          absent:     1,
+          percentage: {
+            $round: [{ $multiply: [{ $divide: ['$present', '$total'] }, 100] }, 0],
+          },
+        },
+      },
+      { $sort: { percentage: -1 } },
+    ]),
+    // Per-date summary (how many sessions were held)
+    Attendance.distinct('date', { group: new mongoose.Types.ObjectId(groupId) }),
   ]);
-
-  // Per-date summary (how many sessions were held)
-  const sessions = await Attendance.distinct('date', { group: new mongoose.Types.ObjectId(groupId) });
 
   return success(res, {
     group,

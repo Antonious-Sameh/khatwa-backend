@@ -43,26 +43,28 @@ const getMyAttendance = asyncHandler(async (req, res) => {
   }
 
   const skip  = (Number(page) - 1) * Number(limit);
-  const total = await Attendance.countDocuments(filter);
 
-  const records = await Attendance
-    .find(filter)
-    .sort({ date: -1 })
-    .skip(skip)
-    .limit(Number(limit))
-    .select('date status note')
-    .lean();
-
-  const stats = await Attendance.aggregate([
-    { $match: { student: new mongoose.Types.ObjectId(studentId) } },
-    {
-      $group: {
-        _id:     null,
-        total:   { $sum: 1 },
-        present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
-        absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent']  }, 1, 0] } },
+  // These three queries are independent of each other — run in parallel.
+  const [total, records, stats] = await Promise.all([
+    Attendance.countDocuments(filter),
+    Attendance
+      .find(filter)
+      .sort({ date: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .select('date status note')
+      .lean(),
+    Attendance.aggregate([
+      { $match: { student: new mongoose.Types.ObjectId(studentId) } },
+      {
+        $group: {
+          _id:     null,
+          total:   { $sum: 1 },
+          present: { $sum: { $cond: [{ $eq: ['$status', 'present'] }, 1, 0] } },
+          absent:  { $sum: { $cond: [{ $eq: ['$status', 'absent']  }, 1, 0] } },
+        },
       },
-    },
+    ]),
   ]);
 
   const s = stats[0] || { total: 0, present: 0, absent: 0 };
@@ -106,12 +108,20 @@ const getMyPayments = asyncHandler(async (req, res) => {
 const getMyGrades = asyncHandler(async (req, res) => {
   const studentId = req.user.userId;
 
-  // ── 1. Manual grades entered by teacher (electronic-exam manual entries + paper exams) ──
-  const manualGradesRaw = await Grade
-    .find({ student: studentId })
-    .populate('exam', 'title maxScore examDate academicYear status')
-    .sort({ createdAt: -1 })
-    .lean();
+  // Manual grades and auto-graded submissions are independent queries
+  // (both filtered only by studentId) — fetch them in parallel.
+  const [manualGradesRaw, submissions] = await Promise.all([
+    Grade
+      .find({ student: studentId })
+      .populate('exam', 'title maxScore examDate academicYear status')
+      .sort({ createdAt: -1 })
+      .lean(),
+    ExamSubmission
+      .find({ student: studentId })
+      .populate('exam', 'title maxScore examDate academicYear status')
+      .sort({ submittedAt: -1 })
+      .lean(),
+  ]);
 
   // توحيد شكل البيانات للامتحانات الورقية والإلكترونية المدخلة يدويًا
   const manualGrades = manualGradesRaw.map(g => {
@@ -130,13 +140,6 @@ const getMyGrades = asyncHandler(async (req, res) => {
   });
 
   // ── 2. Auto-graded submissions (electronic exams, MCQ) ────────────────────
-  const ExamSubmission = mongoose.model('ExamSubmission');
-  const submissions = await ExamSubmission
-    .find({ student: studentId })
-    .populate('exam', 'title maxScore examDate academicYear status')
-    .sort({ submittedAt: -1 })
-    .lean();
-
   // بناء قائمة بالـ IDs لمنع تكرار الامتحانات المدخلة يدويًا مع التلقائية
   const manualExamIds = new Set(
     manualGradesRaw.filter(g => g.exam).map(g => g.exam._id.toString())
@@ -182,38 +185,44 @@ const getMyPoints = asyncHandler(async (req, res) => {
   const { page = 1, limit = 20 } = req.query;
 
   const skip  = (Number(page) - 1) * Number(limit);
-  const total = await Point.countDocuments({ student: studentId });
 
-  const transactions = await Point
-    .find({ student: studentId })
-    .sort({ createdAt: -1 })
-    .skip(skip)
-    .limit(Number(limit))
-    .lean();
-
-  const balanceAgg = await Point.aggregate([
-    { $match: { student: new mongoose.Types.ObjectId(studentId) } },
-    {
-      $group: {
-        _id: null,
-        balance: {
-          $sum: {
-            $cond: [
-              { $eq: ['$type', 'add'] },
-              '$amount',
-              { $multiply: ['$amount', -1] },
-            ],
+  // total, transactions, balance, and the student's own academicYear (needed
+  // for the ranking step below) are all independent — fetch in parallel
+  // instead of one after another (the academicYear lookup previously ran
+  // as a nested sequential query inside the allStudents filter).
+  const [total, transactions, balanceAgg, me] = await Promise.all([
+    Point.countDocuments({ student: studentId }),
+    Point
+      .find({ student: studentId })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number(limit))
+      .lean(),
+    Point.aggregate([
+      { $match: { student: new mongoose.Types.ObjectId(studentId) } },
+      {
+        $group: {
+          _id: null,
+          balance: {
+            $sum: {
+              $cond: [
+                { $eq: ['$type', 'add'] },
+                '$amount',
+                { $multiply: ['$amount', -1] },
+              ],
+            },
           },
         },
       },
-    },
+    ]),
+    User.findById(studentId).select('academicYear').lean(),
   ]);
 
   // Also compute rank in leaderboard
-  const allStudents = await User.find({ 
-    role: 'student', 
-    academicYear: (await User.findById(studentId).select('academicYear').lean())?.academicYear, 
-    isActive: true 
+  const allStudents = await User.find({
+    role: 'student',
+    academicYear: me?.academicYear,
+    isActive: true
   }).select('_id').lean();
 
   const allBalances = await Point.aggregate([
@@ -247,22 +256,25 @@ const getMyRank = asyncHandler(async (req, res) => {
 
   const year = student.academicYear;
 
-  // ── Scores from electronic exams (ExamSubmission) ────────────────────────
-  const electronicExams = await Exam.find({
-    academicYear: year, status: { $ne: 'draft' },
-    $or: [{ examType: 'electronic' }, { examType: { $exists: false } }],
-  }).select('_id maxScore').lean();
+  // electronicExams and allStudents are independent of each other — fetch
+  // in parallel.
+  const [electronicExams, allStudents] = await Promise.all([
+    Exam.find({
+      academicYear: year, status: { $ne: 'draft' },
+      $or: [{ examType: 'electronic' }, { examType: { $exists: false } }],
+    }).select('_id maxScore').lean(),
+    User.find({ role:'student', academicYear:year, isActive:true }).select('_id').lean(),
+  ]);
 
-  const myElecSubs = await ExamSubmission.find({
-    exam: { $in: electronicExams.map(e=>e._id) }, student: req.user.userId,
-  }).select('exam score').lean();
-
-  const myElecScore = myElecSubs.reduce((s,x)=>s+x.score,0);
-  const myElecMax   = electronicExams.reduce((s,e)=>s+(e.maxScore||0),0);
+  const examIds    = electronicExams.map(e=>e._id);
+  const myElecMax  = electronicExams.reduce((s,e)=>s+(e.maxScore||0),0);
 
   // ── All students' electronic scores for ranking ───────────────────────────
+  // (this also gives us the current student's own score — no need for a
+  // separate "my submissions" query, since it's just this map filtered
+  // to one id)
   const allSubs = await ExamSubmission.find({
-    exam: { $in: electronicExams.map(e=>e._id) },
+    exam: { $in: examIds },
   }).select('student exam score').lean();
 
   const elecMap = new Map();
@@ -271,7 +283,7 @@ const getMyRank = asyncHandler(async (req, res) => {
     elecMap.set(s.student.toString(), cur + s.score);
   });
 
-  const allStudents = await User.find({ role:'student', academicYear:year, isActive:true }).select('_id').lean();
+  const myElecScore = elecMap.get(req.user.userId.toString()) || 0;
 
   const sorted = allStudents
     .map(s => ({ id:s._id.toString(), score: elecMap.get(s._id.toString())||0 }))

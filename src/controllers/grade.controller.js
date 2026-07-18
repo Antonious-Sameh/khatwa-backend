@@ -19,28 +19,37 @@ const getExamGrades = asyncHandler(async (req, res) => {
   const exam = await Exam.findById(examId).lean();
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  // All students in the same academic year
-  const students = await User
+  // Students list and the score/submission data both depend only on the
+  // already-loaded exam, not on each other — fetch them in parallel.
+  const studentsPromise = User
     .find({ role: 'student', academicYear: exam.academicYear, isActive: true })
     .select('_id name codePlain group')
     .populate('group', 'name')
     .sort({ name: 1 })
     .lean();
 
-  // ── تجميع الدرجات بناءً على نوع الامتحان (إلكتروني أو ورقي) ──────────────────
-  let scoreMap = {};
-
-  if (exam.examType === 'electronic' || !exam.examType) {
-    // تحويل صريح لـ ObjectId لضمان دقة الاستعلام في جدول الامتحانات الإلكترونية
+  let scoreDataPromise;
+  const isElectronic = exam.examType === 'electronic' || !exam.examType;
+  if (isElectronic) {
     const examObjId = new mongoose.Types.ObjectId(examId);
-    const submissions = await ExamSubmission
+    scoreDataPromise = ExamSubmission
       .find({ exam: examObjId })
       .select('student score percentage submittedAt maxScore')
       .lean();
+  } else {
+    scoreDataPromise = Grade
+      .find({ exam: examId })
+      .select('student score note correctedBy createdAt')
+      .lean();
+  }
 
-    console.log(`[getExamGrades] examId=${examId} → found ${submissions.length} submissions`);
-    
-    submissions.forEach(s => {
+  const [students, scoreDataRows] = await Promise.all([studentsPromise, scoreDataPromise]);
+
+  // ── تجميع الدرجات بناءً على نوع الامتحان (إلكتروني أو ورقي) ──────────────────
+  let scoreMap = {};
+
+  if (isElectronic) {
+    scoreDataRows.forEach(s => {
       scoreMap[s.student.toString()] = {
         score:       s.score,
         percentage:  s.percentage ?? (s.maxScore > 0 ? Math.round((s.score / s.maxScore) * 100) : 0),
@@ -50,12 +59,7 @@ const getExamGrades = asyncHandler(async (req, res) => {
     });
   } else {
     // للامتحانات الورقية واليدوية — نقرأ من جدول Grade العادي
-    const grades = await Grade
-      .find({ exam: examId })
-      .select('student score note correctedBy createdAt')
-      .lean();
-
-    grades.forEach((g) => {
+    scoreDataRows.forEach((g) => {
       scoreMap[g.student.toString()] = {
         score:       g.score,
         percentage:  g.percentage || null,
@@ -212,14 +216,17 @@ const updateGrade = asyncHandler(async (req, res) => {
 // ── GET /api/grades/student/:studentId ───────────────────────────────────────
 // All grades for a student across all exams.
 const getStudentGrades = asyncHandler(async (req, res) => {
-  const student = await User.findOne({ _id: req.params.studentId, role: 'student' }).lean();
+  // The grades query only needs the id from the URL, not the loaded
+  // student document, so both can run in parallel.
+  const [student, grades] = await Promise.all([
+    User.findOne({ _id: req.params.studentId, role: 'student' }).lean(),
+    Grade
+      .find({ student: req.params.studentId })
+      .populate('exam', 'title maxScore examDate academicYear status')
+      .sort({ createdAt: -1 })
+      .lean(),
+  ]);
   if (!student) return notFound(res, 'الطالب غير موجود');
-
-  const grades = await Grade
-    .find({ student: req.params.studentId })
-    .populate('exam', 'title maxScore examDate academicYear status')
-    .sort({ createdAt: -1 })
-    .lean();
 
   const totalScore = grades.reduce((s, g) => s + g.score, 0);
   const totalMax   = grades.reduce((s, g) => s + (g.exam?.maxScore || 0), 0);
@@ -261,36 +268,43 @@ const getRankings = asyncHandler(async (req, res) => {
     if (entry) { entry.totalScore += score || 0; entry.totalMax += max || 0; }
   };
 
-  // ── Electronic: from ExamSubmission ────────────────────────────────────────
-  if (!type || type === 'electronic') {
-    const electronicExams = await Exam.find({
-      academicYear: year,
-      status: { $ne: 'draft' },
-      $or: [{ examType: 'electronic' }, { examType: { $exists: false } }],
-    }).select('_id maxScore').lean();
+  // The electronic-grades branch and the paper-grades branch are
+  // independent of each other (each only reads from students/scoreMap and
+  // writes to its own fields via addScores) — run them concurrently
+  // instead of one after another.
+  await Promise.all([
+    (async () => {
+      if (!type || type === 'electronic') {
+        const electronicExams = await Exam.find({
+          academicYear: year,
+          status: { $ne: 'draft' },
+          $or: [{ examType: 'electronic' }, { examType: { $exists: false } }],
+        }).select('_id maxScore').lean();
 
-    const examMaxMap = {};
-    electronicExams.forEach(e => { examMaxMap[e._id.toString()] = e.maxScore || 0; });
+        const examMaxMap = {};
+        electronicExams.forEach(e => { examMaxMap[e._id.toString()] = e.maxScore || 0; });
 
-    const subs = await ExamSubmission.find({
-      exam: { $in: electronicExams.map(e => e._id) },
-    }).select('student exam score').lean();
+        const subs = await ExamSubmission.find({
+          exam: { $in: electronicExams.map(e => e._id) },
+        }).select('student exam score').lean();
 
-    subs.forEach(s => addScores(s.student, s.score, examMaxMap[s.exam.toString()] || 0));
-  }
+        subs.forEach(s => addScores(s.student, s.score, examMaxMap[s.exam.toString()] || 0));
+      }
+    })(),
+    (async () => {
+      if (!type || type === 'paper') {
+        const paperGrades = await Grade.find({
+          examType: 'paper',
+          exam: null,
+        }).populate({ path: 'student', select: 'academicYear', match: { academicYear: year } })
+          .select('student score maxScore').lean();
 
-  // ── Paper: from Grade model (examType:'paper') ──────────────────────────────
-  if (!type || type === 'paper') {
-    const paperGrades = await Grade.find({
-      examType: 'paper',
-      exam: null,
-    }).populate({ path: 'student', select: 'academicYear', match: { academicYear: year } })
-      .select('student score maxScore').lean();
-
-    paperGrades.forEach(g => {
-      if (g.student) addScores(g.student._id, g.score, g.maxScore || 0);
-    });
-  }
+        paperGrades.forEach(g => {
+          if (g.student) addScores(g.student._id, g.score, g.maxScore || 0);
+        });
+      }
+    })(),
+  ]);
 
   // Build ranking list
   const ranked = students
@@ -355,13 +369,14 @@ const getPaperExamSheet = asyncHandler(async (req, res) => {
   const { year, title } = req.query;
   if (!year||!title) return error(res, 'السنة والعنوان مطلوبان', 400);
 
-  const students = await User
-    .find({ role:'student', academicYear:year, isActive:true })
-    .select('_id name codePlain group')
-    .populate('group','name')
-    .sort({ name:1 }).lean();
-
-  const grades = await Grade.find({ examType:'paper', exam:null, examTitle:title }).lean();
+  const [students, grades] = await Promise.all([
+    User
+      .find({ role:'student', academicYear:year, isActive:true })
+      .select('_id name codePlain group')
+      .populate('group','name')
+      .sort({ name:1 }).lean(),
+    Grade.find({ examType:'paper', exam:null, examTitle:title }).lean(),
+  ]);
   const gradeMap = {};
   grades.forEach(g => { gradeMap[g.student.toString()] = g; });
 
@@ -437,28 +452,37 @@ const getExamRankings = asyncHandler(async (req, res) => {
 
   if (!year) return error(res, 'السنة الدراسية مطلوبة', 400);
 
-  const students = await User
-    .find({ role: 'student', academicYear: year, isActive: true })
-    .select('_id name codePlain group')
-    .populate('group', 'name')
-    .lean();
+  // Students list and score data are independent of each other — fetch
+  // them in parallel. Within the electronic branch, the exam (for
+  // maxScore) and the submissions are also independent of each other.
+  const [students, scoreMap] = await Promise.all([
+    User
+      .find({ role: 'student', academicYear: year, isActive: true })
+      .select('_id name codePlain group')
+      .populate('group', 'name')
+      .lean(),
+    (async () => {
+      const map = new Map();
 
-  const scoreMap = new Map();
+      if (examType === 'electronic' && examId) {
+        const examObjId = new mongoose.Types.ObjectId(examId);
+        const [exam, subs] = await Promise.all([
+          Exam.findById(examObjId).select('maxScore title').lean(),
+          ExamSubmission.find({ exam: examObjId }).select('student score percentage').lean(),
+        ]);
 
-  if (examType === 'electronic' && examId) {
-    // Electronic: read from ExamSubmission
-    const examObjId = new mongoose.Types.ObjectId(examId);
-    const exam      = await Exam.findById(examObjId).select('maxScore title').lean();
-    const subs      = await ExamSubmission.find({ exam: examObjId }).select('student score percentage').lean();
+        subs.forEach(s => map.set(s.student.toString(), { score: s.score, maxScore: exam?.maxScore || 0, percentage: s.percentage || 0 }));
 
-    subs.forEach(s => scoreMap.set(s.student.toString(), { score: s.score, maxScore: exam?.maxScore || 0, percentage: s.percentage || 0 }));
+      } else if (examType === 'paper' && examTitle) {
+        // Paper: read from Grade model
+        const grades = await Grade.find({ examType: 'paper', exam: null, examTitle }).lean();
 
-  } else if (examType === 'paper' && examTitle) {
-    // Paper: read from Grade model
-    const grades = await Grade.find({ examType: 'paper', exam: null, examTitle }).lean();
+        grades.forEach(g => map.set(g.student.toString(), { score: g.score || 0, maxScore: g.maxScore || 0, percentage: g.maxScore > 0 ? Math.round((g.score/g.maxScore)*100) : 0 }));
+      }
 
-    grades.forEach(g => scoreMap.set(g.student.toString(), { score: g.score || 0, maxScore: g.maxScore || 0, percentage: g.maxScore > 0 ? Math.round((g.score/g.maxScore)*100) : 0 }));
-  }
+      return map;
+    })(),
+  ]);
 
   const ranked = students
     .map(s => ({

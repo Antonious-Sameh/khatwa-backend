@@ -143,13 +143,19 @@ const deleteExam = asyncHandler(async (req, res) => {
   const exam = await Exam.findById(req.params.id);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  // Delete answer sheet(s) from Cloudinary
-  for (const sheet of (exam.answerSheets && exam.answerSheets.length ? exam.answerSheets : (exam.answerSheetUrl ? [{ url: exam.answerSheetUrl, type: exam.answerSheetType }] : []))) {
-    await destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image');
-  }
+  // Delete answer sheet(s) from Cloudinary, the submissions, and the exam
+  // document itself. destroyFromCloudinary never throws (errors are
+  // swallowed inside it) and none of these operations depend on each
+  // other's result, so they can all run in parallel instead of one by one.
+  const sheets = exam.answerSheets && exam.answerSheets.length
+    ? exam.answerSheets
+    : (exam.answerSheetUrl ? [{ url: exam.answerSheetUrl, type: exam.answerSheetType }] : []);
 
-  await ExamSubmission.deleteMany({ exam: exam._id });
-  await exam.deleteOne();
+  await Promise.all([
+    ...sheets.map((sheet) => destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image')),
+    ExamSubmission.deleteMany({ exam: exam._id }),
+    exam.deleteOne(),
+  ]);
   return success(res, {}, 'تم حذف الامتحان بنجاح');
 });
 
@@ -199,9 +205,13 @@ const deleteAnswerSheet = asyncHandler(async (req, res) => {
 
   // Backward-compat: no sheetId provided → clear everything (old behaviour)
   if (!sheetId) {
-    for (const sheet of (exam.answerSheets || [])) {
-      await destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image');
-    }
+    // Independent Cloudinary deletions — no need to wait for each one
+    // before starting the next.
+    await Promise.all(
+      (exam.answerSheets || []).map((sheet) =>
+        destroyFromCloudinary(sheet.url, sheet.type === 'pdf' ? 'raw' : 'image')
+      )
+    );
     exam.answerSheets    = [];
     exam.answerSheetUrl  = null;
     exam.answerSheetType = null;
@@ -228,17 +238,25 @@ const deleteAnswerSheet = asyncHandler(async (req, res) => {
 // ── POST /api/exams/:id/submit (student) ─────────────────────────────────────
 const submitExam = asyncHandler(async (req, res) => {
   const studentId = req.user.userId;
-  const exam = await Exam.findById(req.params.id);
+
+  // The exam, the student, and any prior submission are independent lookups
+  // (the "existing submission" filter only needs the id from the URL, not
+  // the loaded exam document) — fetch all three in parallel, then validate
+  // in the same order as before.
+  const [exam, student, existing] = await Promise.all([
+    Exam.findById(req.params.id),
+    User.findById(studentId).lean(),
+    ExamSubmission.findOne({ exam: req.params.id, student: studentId }),
+  ]);
+
   if (!exam) return notFound(res, 'الامتحان غير موجود');
   if (exam.status !== 'published') return apiError(res, 'الامتحان غير متاح حالياً', 403);
 
   // Check student's academic year matches
-  const student = await User.findById(studentId).lean();
   if (!student || student.academicYear !== exam.academicYear)
     return apiError(res, 'هذا الامتحان غير مخصص لك', 403);
 
   // Check already submitted
-  const existing = await ExamSubmission.findOne({ exam: exam._id, student: studentId });
   if (existing) return apiError(res, 'لقد حللت هذا الامتحان من قبل', 400);
 
   const { answers = [], timeTakenSeconds = 0 } = req.body;
@@ -275,13 +293,16 @@ const submitExam = asyncHandler(async (req, res) => {
 
 // ── GET /api/exams/:id/results (teacher) ─────────────────────────────────────
 const getResults = asyncHandler(async (req, res) => {
-  const exam = await Exam.findById(req.params.id).lean();
+  // submissions only need the id from the URL, not the loaded exam document,
+  // so both queries can run in parallel.
+  const [exam, submissions] = await Promise.all([
+    Exam.findById(req.params.id).lean(),
+    ExamSubmission.find({ exam: req.params.id })
+      .populate('student', 'name codePlain academicYear')
+      .sort({ score: -1 })
+      .lean(),
+  ]);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
-
-  const submissions = await ExamSubmission.find({ exam: exam._id })
-    .populate('student', 'name codePlain academicYear')
-    .sort({ score: -1 })
-    .lean();
 
   const avg = submissions.length > 0
     ? Math.round(submissions.reduce((s, r) => s + r.score, 0) / submissions.length)
@@ -302,10 +323,14 @@ const getResults = asyncHandler(async (req, res) => {
 // ── GET /api/exams/:id/my-result (student) ───────────────────────────────────
 const getMyResult = asyncHandler(async (req, res) => {
   const studentId = req.user.userId;
-  const exam = await Exam.findById(req.params.id).lean();
-  if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  const submission = await ExamSubmission.findOne({ exam: exam._id, student: studentId }).lean();
+  // The submission lookup only needs the id from the URL, not the loaded
+  // exam document, so both queries can run in parallel.
+  const [exam, submission] = await Promise.all([
+    Exam.findById(req.params.id).lean(),
+    ExamSubmission.findOne({ exam: req.params.id, student: studentId }).lean(),
+  ]);
+  if (!exam) return notFound(res, 'الامتحان غير موجود');
 
   return success(res, { exam, submission: submission || null });
 });
