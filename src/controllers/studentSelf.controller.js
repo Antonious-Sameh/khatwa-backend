@@ -21,7 +21,7 @@ const { asyncHandler } = require('../middleware/error.middleware');
 const getMe = asyncHandler(async (req, res) => {
   const student = await User
     .findById(req.user.userId)
-    .populate('group', 'name academicYear days time')
+    .populate('group', 'name academicYear days time schedule')
     .lean();
 
   if (!student) return notFound(res, 'المستخدم غير موجود');
