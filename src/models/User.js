@@ -94,6 +94,15 @@ const userSchema = new mongoose.Schema(
       default: null,
       select:  false,
     },
+
+    // Single-device binding (students only). Stores a per-browser device
+    // identifier sent by the frontend on login. Not enforced for teachers.
+    // null = not bound yet (next login binds it automatically).
+    deviceId: {
+      type:    String,
+      default: null,
+      select:  false,
+    },
   },
   {
     timestamps: true,

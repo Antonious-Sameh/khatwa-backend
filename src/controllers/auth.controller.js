@@ -12,7 +12,7 @@ const { asyncHandler }          = require('../middleware/error.middleware');
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 const login = asyncHandler(async (req, res) => {
-  const { code } = req.body;
+  const { code, deviceId } = req.body;
 
   if (!code || typeof code !== 'string' || code.trim().length < 4) {
     return unauthorized(res, 'الكود مطلوب ويجب أن يكون 4 أحرف على الأقل');
@@ -23,7 +23,7 @@ const login = asyncHandler(async (req, res) => {
   // Fast lookup by codePlain (indexed) — no need to scan all users
   const user = await User
     .findOne({ codePlain: enteredCode, isActive: true })
-    .select('+codeHash +refreshToken');
+    .select('+codeHash +refreshToken +deviceId');
 
   if (!user) {
     return unauthorized(res, 'الكود غير صحيح أو الحساب غير نشط');
@@ -33,6 +33,28 @@ const login = asyncHandler(async (req, res) => {
   const isMatch = await user.compareCode(enteredCode);
   if (!isMatch) {
     return unauthorized(res, 'الكود غير صحيح');
+  }
+
+  // ── Single-device binding (students only) ──────────────────────────────────
+  // Teachers are never affected and can log in from any number of devices.
+  if (user.role === 'student') {
+    const incomingDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
+
+    if (!incomingDeviceId) {
+      return unauthorized(res, 'تعذر التحقق من الجهاز، برجاء تحديث الصفحة والمحاولة مرة أخرى');
+    }
+
+    if (user.deviceId && user.deviceId !== incomingDeviceId) {
+      return unauthorized(
+        res,
+        'هذا الحساب مرتبط بجهاز آخر بالفعل. تواصل مع المعلم لإعادة تعيين الجهاز إذا كنت تريد الدخول من هذا الجهاز'
+      );
+    }
+
+    // First login (or after a teacher reset) → bind this device.
+    if (!user.deviceId) {
+      user.deviceId = incomingDeviceId;
+    }
   }
 
   // Generate tokens

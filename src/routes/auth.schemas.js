@@ -9,6 +9,9 @@ const loginSchema = Joi.object({
     'string.max':  'الكود طويل جداً',
     'any.required': 'الكود مطلوب',
   }),
+  // Sent by the frontend to bind a student account to a single device.
+  // Optional/ignored for teacher logins.
+  deviceId: Joi.string().max(200).allow('', null).optional(),
 });
 
 module.exports = { loginSchema };

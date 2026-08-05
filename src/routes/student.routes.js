@@ -12,6 +12,7 @@ const {
   deleteStudent,
   toggleStatus,
   resetCode,
+  resetDevice,
   getStudentReport,
   getStudentsByYear,
 } = require('../controllers/student.controller');
@@ -45,5 +46,8 @@ router.patch('/:id/toggle-status', toggleStatus);
 
 // POST /api/students/:id/reset-code
 router.post('/:id/reset-code', resetCode);
+
+// POST /api/students/:id/reset-device — unbind the student's device
+router.post('/:id/reset-device', resetDevice);
 
 module.exports = router;

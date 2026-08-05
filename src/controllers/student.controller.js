@@ -127,6 +127,17 @@ const resetCode = asyncHandler(async (req, res) => {
     `تم إعادة تعيين كود الطالب — الكود الجديد: ${newPlainCode}`);
 });
 
+// ── Reset device binding — allows the student to log in from a new device ──
+// Does not touch the code, refresh token, or any other student data, and
+// does not affect any other student or any teacher account.
+const resetDevice = asyncHandler(async (req, res) => {
+  const student = await User.findOne({ _id: req.params.id, role: 'student' });
+  if (!student) return notFound(res, 'الطالب غير موجود');
+  student.deviceId = null;
+  await student.save();
+  return success(res, {}, 'تم إعادة تعيين الجهاز — يمكن للطالب تسجيل الدخول من جهاز جديد الآن');
+});
+
 const getStudentReport = asyncHandler(async (req, res) => {
   const { buildStudentReport } = require('../services/report.service');
   const student = await User
@@ -149,5 +160,5 @@ const getStudentsByYear = asyncHandler(async (req, res) => {
 
 module.exports = {
   getStudents, getStudent, createStudent, updateStudent,
-  deleteStudent, toggleStatus, resetCode, getStudentReport, getStudentsByYear,
+  deleteStudent, toggleStatus, resetCode, resetDevice, getStudentReport, getStudentsByYear,
 };
