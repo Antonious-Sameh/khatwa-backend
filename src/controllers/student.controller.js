@@ -127,15 +127,59 @@ const resetCode = asyncHandler(async (req, res) => {
     `تم إعادة تعيين كود الطالب — الكود الجديد: ${newPlainCode}`);
 });
 
-// ── Reset device binding — allows the student to log in from a new device ──
+// ── Reset ALL devices — allows the student to log in from new device(s) ────
 // Does not touch the code, refresh token, or any other student data, and
 // does not affect any other student or any teacher account.
 const resetDevice = asyncHandler(async (req, res) => {
   const student = await User.findOne({ _id: req.params.id, role: 'student' });
   if (!student) return notFound(res, 'الطالب غير موجود');
+  student.devices  = [];
   student.deviceId = null;
   await student.save();
-  return success(res, {}, 'تم إعادة تعيين الجهاز — يمكن للطالب تسجيل الدخول من جهاز جديد الآن');
+  return success(res, {}, 'تم إعادة تعيين جميع الأجهزة — يمكن للطالب تسجيل الدخول من أجهزة جديدة الآن');
+});
+
+// ── List a student's bound devices (max 2) ──────────────────────────────────
+const getDevices = asyncHandler(async (req, res) => {
+  const student = await User
+    .findOne({ _id: req.params.id, role: 'student' })
+    .select('+devices +deviceId');
+  if (!student) return notFound(res, 'الطالب غير موجود');
+
+  // Same transparent legacy-migration view used at login, so the teacher
+  // sees a device even if the student hasn't logged in since this update.
+  let devices = Array.isArray(student.devices) ? student.devices : [];
+  if (devices.length === 0 && student.deviceId) {
+    devices = [{ id: student.deviceId, label: null, addedAt: student.createdAt, lastSeenAt: null }];
+  }
+
+  return success(res, { devices });
+});
+
+// ── Remove a single bound device — the freed slot can be used by a new one ─
+const removeDevice = asyncHandler(async (req, res) => {
+  const student = await User
+    .findOne({ _id: req.params.id, role: 'student' })
+    .select('+devices +deviceId');
+  if (!student) return notFound(res, 'الطالب غير موجود');
+
+  const { deviceId: targetId } = req.params;
+
+  let devices = Array.isArray(student.devices) ? student.devices : [];
+  if (devices.length === 0 && student.deviceId) {
+    devices = [{ id: student.deviceId, label: null, addedAt: student.createdAt, lastSeenAt: null }];
+  }
+
+  const remaining = devices.filter(d => d.id !== targetId);
+  if (remaining.length === devices.length) {
+    return notFound(res, 'الجهاز غير موجود');
+  }
+
+  student.devices  = remaining;
+  student.deviceId = null; // this write path always fully migrates to `devices`
+  await student.save();
+
+  return success(res, { devices: remaining }, 'تم حذف الجهاز بنجاح — يمكن لجهاز جديد الدخول مكانه');
 });
 
 const getStudentReport = asyncHandler(async (req, res) => {
@@ -160,5 +204,6 @@ const getStudentsByYear = asyncHandler(async (req, res) => {
 
 module.exports = {
   getStudents, getStudent, createStudent, updateStudent,
-  deleteStudent, toggleStatus, resetCode, resetDevice, getStudentReport, getStudentsByYear,
+  deleteStudent, toggleStatus, resetCode, resetDevice, getDevices, removeDevice,
+  getStudentReport, getStudentsByYear,
 };

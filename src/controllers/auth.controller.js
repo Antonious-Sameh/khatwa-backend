@@ -9,6 +9,11 @@ const {
 } = require('../services/token.service');
 const { success, unauthorized } = require('../utils/apiResponse');
 const { asyncHandler }          = require('../middleware/error.middleware');
+const { deriveDeviceLabel }     = require('../utils/deviceLabel');
+
+// Max number of devices a single student account may be bound to at once.
+// Teachers are never subject to this limit (see login below).
+const MAX_STUDENT_DEVICES = 2;
 
 // ── POST /api/auth/login ──────────────────────────────────────────────────────
 const login = asyncHandler(async (req, res) => {
@@ -23,7 +28,7 @@ const login = asyncHandler(async (req, res) => {
   // Fast lookup by codePlain (indexed) — no need to scan all users
   const user = await User
     .findOne({ codePlain: enteredCode, isActive: true })
-    .select('+codeHash +refreshToken +deviceId');
+    .select('+codeHash +refreshToken +deviceId +devices');
 
   if (!user) {
     return unauthorized(res, 'الكود غير صحيح أو الحساب غير نشط');
@@ -35,7 +40,7 @@ const login = asyncHandler(async (req, res) => {
     return unauthorized(res, 'الكود غير صحيح');
   }
 
-  // ── Single-device binding (students only) ──────────────────────────────────
+  // ── Multi-device binding (students only, max 2 devices) ────────────────────
   // Teachers are never affected and can log in from any number of devices.
   if (user.role === 'student') {
     const incomingDeviceId = typeof deviceId === 'string' ? deviceId.trim() : '';
@@ -44,17 +49,41 @@ const login = asyncHandler(async (req, res) => {
       return unauthorized(res, 'تعذر التحقق من الجهاز، برجاء تحديث الصفحة والمحاولة مرة أخرى');
     }
 
-    if (user.deviceId && user.deviceId !== incomingDeviceId) {
-      return unauthorized(
-        res,
-        'هذا الحساب مرتبط بجهاز آخر بالفعل. تواصل مع المعلم لإعادة تعيين الجهاز إذا كنت تريد الدخول من هذا الجهاز'
-      );
+    // Start from the current devices list; transparently migrate a legacy
+    // single deviceId (from before the two-device system) into it so no
+    // student is logged out by this change.
+    let devices = Array.isArray(user.devices) ? user.devices.slice() : [];
+    if (devices.length === 0 && user.deviceId) {
+      devices = [{
+        id:         user.deviceId,
+        label:      null,
+        addedAt:    user.createdAt || new Date(),
+        lastSeenAt: new Date(),
+      }];
     }
 
-    // First login (or after a teacher reset) → bind this device.
-    if (!user.deviceId) {
-      user.deviceId = incomingDeviceId;
+    const existing = devices.find(d => d.id === incomingDeviceId);
+
+    if (existing) {
+      // Known device → just update lastSeenAt.
+      existing.lastSeenAt = new Date();
+    } else if (devices.length >= MAX_STUDENT_DEVICES) {
+      return unauthorized(
+        res,
+        `تم الوصول للحد الأقصى لعدد الأجهزة المسموح بها (${MAX_STUDENT_DEVICES}) لهذا الحساب. تواصل مع المعلم لإدارة أجهزة الحساب`
+      );
+    } else {
+      // New device and there's room → bind it.
+      devices.push({
+        id:         incomingDeviceId,
+        label:      deriveDeviceLabel(req.headers['user-agent']),
+        addedAt:    new Date(),
+        lastSeenAt: new Date(),
+      });
     }
+
+    user.devices  = devices;
+    user.deviceId = null; // migration complete — legacy field no longer used
   }
 
   // Generate tokens
