@@ -13,6 +13,7 @@ const {
   getMyRank,
   getMyNotes,
   getMyLessons,
+  getMyLessonById,
   getMyReport,
 } = require('../controllers/studentSelf.controller');
 
@@ -39,6 +40,9 @@ router.get('/notes', getMyNotes);
 
 // GET /api/student/lessons?type=video|file
 router.get('/lessons', getMyLessons);
+
+// GET /api/student/lessons/:id — full lesson detail (real videoUrl/items, not stripped)
+router.get('/lessons/:id', getMyLessonById);
 
 // GET /api/student/report
 router.get('/report', getMyReport);

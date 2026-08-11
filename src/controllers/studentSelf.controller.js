@@ -398,6 +398,43 @@ const getMyLessons = asyncHandler(async (req, res) => {
   });
 });
 
+// ── GET /api/student/lessons/:id ────────────────────────────────────────────
+// Returns full detail for a single lesson (including the real videoUrl /
+// items[] — NOT stripped, unlike the list endpoint above which deliberately
+// hides the raw video link). Scoped to the student's own academic year and
+// only if the lesson is published, same restriction as the list endpoint.
+const getMyLessonById = asyncHandler(async (req, res) => {
+  const student = await User.findById(req.user.userId).lean();
+  if (!student) return notFound(res, 'الطالب غير موجود');
+
+  const lesson = await Lesson.findOne({
+    _id:          req.params.id,
+    academicYear: student.academicYear,
+    published:    true,
+  }).lean();
+
+  if (!lesson) return notFound(res, 'الدرس غير موجود');
+
+  const log = await WatchLog
+    .findOne({ student: req.user.userId, lesson: lesson._id })
+    .select('watchedAt completed watchDuration watchPercentage playCount')
+    .lean();
+
+  return success(res, {
+    lesson: {
+      ...lesson,
+      watchLog: log ? {
+        watched:         true,
+        watchedAt:       log.watchedAt,
+        completed:       log.completed       || false,
+        watchDuration:   log.watchDuration   || 0,
+        watchPercentage: log.watchPercentage || 0,
+        playCount:       log.playCount       || 0,
+      } : null,
+    },
+  });
+});
+
 // ── GET /api/student/report ───────────────────────────────────────────────────
 const getMyReport = asyncHandler(async (req, res) => {
   const student = await User
@@ -420,5 +457,6 @@ module.exports = {
   getMyRank,
   getMyNotes,
   getMyLessons,
+  getMyLessonById,
   getMyReport,
 };
