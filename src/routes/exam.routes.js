@@ -3,7 +3,7 @@ const router  = express.Router();
 const {
   getExams, getExam, createExam, updateExam, deleteExam,
   changeStatus, uploadAnswerSheet: uploadAnswerSheetCtrl, deleteAnswerSheet,
-  submitExam, getResults, getMyResult, uploadPaperFile, deletePaperFile, // ضفناهم هنا
+  submitExam, getResults, getMyResult, getSubmissionDetail, uploadPaperFile, deletePaperFile, // ضفناهم هنا
 } = require('../controllers/exam.controller');
 const { protect, isTeacher, isStudent } = require('../middleware/auth.middleware');
 const { uploadAnswerSheet } = require('../config/multer');
@@ -25,6 +25,7 @@ router.delete('/:id/answer-sheet', isTeacher, deleteAnswerSheet);
 router.post('/:id/paper-file',   isTeacher, uploadAnswerSheet.single('paperFile'), uploadPaperFile);
 router.delete('/:id/paper-file', isTeacher, deletePaperFile);
 router.get('/:id/results',         isTeacher, getResults);
+router.get('/:id/results/:studentId', isTeacher, getSubmissionDetail);
 
 // Student only
 router.post('/:id/submit',    protect, isStudent, submitExam);

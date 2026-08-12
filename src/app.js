@@ -50,12 +50,6 @@ const globalLimiter = rateLimit({
   legacyHeaders:   false,
 });
 
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max:      20,
-  message:  { success: false, message: 'محاولات تسجيل دخول كثيرة، حاول بعد 15 دقيقة' },
-});
-
 app.use(globalLimiter);
 
 // ── Body parsers ──────────────────────────────────────────────────────────────
@@ -82,7 +76,7 @@ app.get('/api/health', (req, res) => {
 // ── API Routes ────────────────────────────────────────────────────────────────
 
 // Auth (rate-limited separately)
-app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/auth', authRoutes);
 
 // Teacher-only routes (protect + isTeacher applied per-router or per-route)
 app.use('/api/students',   protect, isTeacher, studentRoutes);

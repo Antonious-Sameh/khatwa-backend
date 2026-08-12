@@ -320,6 +320,24 @@ const getResults = asyncHandler(async (req, res) => {
   });
 });
 
+// ── GET /api/exams/:id/results/:studentId (teacher) ───────────────────────────
+// Full detail of a single student's attempt: the complete exam (questions with
+// text/options/imageUrl/correctAnswer) plus that student's submission (chosen
+// answers, correctness, points). Purely additive — does not change submitExam,
+// getResults, or getMyResult, and does not touch the grading logic itself.
+const getSubmissionDetail = asyncHandler(async (req, res) => {
+  const [exam, submission] = await Promise.all([
+    Exam.findById(req.params.id).lean(),
+    ExamSubmission.findOne({ exam: req.params.id, student: req.params.studentId })
+      .populate('student', 'name codePlain academicYear')
+      .lean(),
+  ]);
+  if (!exam) return notFound(res, 'الامتحان غير موجود');
+  if (!submission) return notFound(res, 'لا توجد محاولة لهذا الطالب في هذا الامتحان');
+
+  return success(res, { exam, submission });
+});
+
 // ── GET /api/exams/:id/my-result (student) ───────────────────────────────────
 const getMyResult = asyncHandler(async (req, res) => {
   const studentId = req.user.userId;
@@ -376,6 +394,6 @@ const deletePaperFile = asyncHandler(async (req, res) => {
 module.exports = {
   getExams, getExam, createExam, updateExam, deleteExam,
   changeStatus, uploadAnswerSheet, deleteAnswerSheet,
-  submitExam, getResults, getMyResult,uploadPaperFile, 
+  submitExam, getResults, getMyResult, getSubmissionDetail, uploadPaperFile, 
   deletePaperFile,
 };
