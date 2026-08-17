@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const User     = require('../models/User');
 const Group    = require('../models/Group');
+require('../models/Passkey'); // ensures the model is registered for the lazy mongoose.model() lookups below
 const { generateStudentCode, generateResetCode } = require('../utils/generateCode');
 const { paginate }    = require('../utils/paginate');
 const { success, created, notFound, error } = require('../utils/apiResponse');
@@ -85,8 +86,8 @@ const deleteStudent = asyncHandler(async (req, res) => {
   const sid = student._id;
 
   // Cascade delete all related data
-  const [Attendance, Payment, Grade, Point, Note, WatchLog, ExamSubmission] =
-    ['Attendance','Payment','Grade','Point','Note','WatchLog','ExamSubmission']
+  const [Attendance, Payment, Grade, Point, Note, WatchLog, ExamSubmission, Passkey] =
+    ['Attendance','Payment','Grade','Point','Note','WatchLog','ExamSubmission','Passkey']
       .map(m => { try { return mongoose.model(m); } catch { return null; } });
 
   await Promise.allSettled([
@@ -96,6 +97,8 @@ const deleteStudent = asyncHandler(async (req, res) => {
     Point          ? Point.deleteMany({ student: sid })          : null,
     WatchLog       ? WatchLog.deleteMany({ student: sid })       : null,
     ExamSubmission ? ExamSubmission.deleteMany({ student: sid }) : null,
+    // Any passkeys (fingerprint/Face ID login) registered by this student
+    Passkey        ? Passkey.deleteMany({ user: sid })           : null,
     // For notes: remove from readBy arrays + delete private notes
     Note ? Note.updateMany({}, { $pull: { readBy: sid } })       : null,
     Note ? Note.deleteMany({ type: 'private', student: sid })    : null,
@@ -136,6 +139,15 @@ const resetDevice = asyncHandler(async (req, res) => {
   student.devices  = [];
   student.deviceId = null;
   await student.save();
+
+  // Any passkey (fingerprint/Face ID) registered on this student's old
+  // devices must stop working too — otherwise an old device could use its
+  // passkey to bypass the reset.
+  try {
+    const Passkey = mongoose.model('Passkey');
+    await Passkey.deleteMany({ user: student._id });
+  } catch { /* Passkey model not loaded — nothing to clean up */ }
+
   return success(res, {}, 'تم إعادة تعيين جميع الأجهزة — يمكن للطالب تسجيل الدخول من أجهزة جديدة الآن');
 });
 
@@ -178,6 +190,13 @@ const removeDevice = asyncHandler(async (req, res) => {
   student.devices  = remaining;
   student.deviceId = null; // this write path always fully migrates to `devices`
   await student.save();
+
+  // Any passkey (fingerprint/Face ID) registered specifically on the removed
+  // device must stop working too — the other devices' passkeys are untouched.
+  try {
+    const Passkey = mongoose.model('Passkey');
+    await Passkey.deleteMany({ user: student._id, deviceId: targetId });
+  } catch { /* Passkey model not loaded — nothing to clean up */ }
 
   return success(res, { devices: remaining }, 'تم حذف الجهاز بنجاح — يمكن لجهاز جديد الدخول مكانه');
 });

@@ -5,6 +5,14 @@ const rateLimit   = require('express-rate-limit');
 const router       = express.Router();
 
 const { login, refresh, logout, me } = require('../controllers/auth.controller');
+const {
+  registerOptions: passkeyRegisterOptions,
+  registerVerify:  passkeyRegisterVerify,
+  loginOptions:    passkeyLoginOptions,
+  loginVerify:     passkeyLoginVerify,
+  status:          passkeyStatus,
+  removeMine:      passkeyRemoveMine,
+} = require('../controllers/passkey.controller');
 const { protect }                    = require('../middleware/auth.middleware');
 const { validate }                   = require('../middleware/validate.middleware');
 const { loginSchema }                = require('./auth.schemas');
@@ -39,5 +47,29 @@ router.post('/logout', logout);
 
 // GET  /api/auth/me  (protected)
 router.get('/me', protect, me);
+
+// ── Passkey / WebAuthn (optional, additive login method) ─────────────────────
+// Rate-limited by IP like the other auth endpoints, to keep the surface
+// consistent — an assertion/attestation can't meaningfully be "guessed", but
+// this still bounds request volume against these endpoints.
+const passkeyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max:      20,
+  message:  { success: false, message: 'محاولات كثيرة، حاول بعد قليل' },
+  standardHeaders: true,
+  legacyHeaders:   false,
+});
+
+// Registering a passkey happens after a normal, authenticated login.
+router.post('/passkey/register/options', passkeyLimiter, protect, passkeyRegisterOptions);
+router.post('/passkey/register/verify',  passkeyLimiter, protect, passkeyRegisterVerify);
+
+// Logging in with a passkey happens BEFORE the user is authenticated.
+router.post('/passkey/login/options', passkeyLimiter, passkeyLoginOptions);
+router.post('/passkey/login/verify',  passkeyLimiter, passkeyLoginVerify);
+
+// Whether the current device already has a passkey / turning it back off.
+router.get('/passkey/status',  protect, passkeyStatus);
+router.delete('/passkey',      protect, passkeyRemoveMine);
 
 module.exports = router;
