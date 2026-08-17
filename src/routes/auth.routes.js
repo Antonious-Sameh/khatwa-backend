@@ -18,7 +18,7 @@ const { loginSchema }                = require('./auth.schemas');
 // when no code is present in the body (e.g. a malformed/non-JSON request).
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max:      8,
+  max:      25,
   message:  { success: false, message: 'محاولات دخول كثيرة لهذا الحساب، حاول بعد 15 دقيقة' },
   standardHeaders: true,
   legacyHeaders:   false,

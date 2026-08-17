@@ -42,6 +42,10 @@ app.use(cors({
 }));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
+/*
+
+
+
 const globalLimiter = rateLimit({
   windowMs:        15 * 60 * 1000,
   max:             300,
@@ -51,6 +55,11 @@ const globalLimiter = rateLimit({
 });
 
 app.use(globalLimiter);
+
+
+*/ 
+
+
 
 // ── Body parsers ──────────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
