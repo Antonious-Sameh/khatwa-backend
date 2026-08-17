@@ -104,14 +104,28 @@ const getPaymentSummary = async (studentId) => {
 const getGrades = async (studentId) => {
   try {
     const Grade = mongoose.model('Grade');
-    const grades = await Grade
+    const gradesRaw = await Grade
       .find({ student: studentId })
       .populate('exam', 'title maxScore examDate')
       .sort({ createdAt: -1 })
       .lean();
 
+    // Normalize each grade so the frontend has a single consistent shape,
+    // whether it came from an electronic exam (populated `exam`) or a
+    // paper/manual grade (title + maxScore stored directly on the Grade doc).
+    // Original `exam`/`examTitle`/`maxScore` fields are kept untouched below.
+    const grades = gradesRaw.map((g) => {
+      const examTitleResolved = g.exam?.title      ?? g.examTitle ?? 'امتحان';
+      const maxScoreResolved  = g.exam?.maxScore    ?? g.maxScore  ?? 0;
+      const examDateResolved  = g.exam?.examDate    ?? g.createdAt;
+      const percentage        = maxScoreResolved > 0
+        ? Math.round((g.score / maxScoreResolved) * 100)
+        : 0;
+      return { ...g, examTitleResolved, maxScoreResolved, examDateResolved, percentage };
+    });
+
     const totalScore = grades.reduce((s, g) => s + g.score, 0);
-    const totalMax   = grades.reduce((s, g) => s + (g.exam?.maxScore || 0), 0);
+    const totalMax   = grades.reduce((s, g) => s + (g.maxScoreResolved || 0), 0);
 
     return {
       list:        grades,
