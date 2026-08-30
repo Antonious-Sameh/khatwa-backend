@@ -4,6 +4,7 @@ const {
   getExams, getExam, createExam, updateExam, deleteExam,
   changeStatus, uploadAnswerSheet: uploadAnswerSheetCtrl, deleteAnswerSheet,
   submitExam, getResults, getMyResult, getSubmissionDetail, uploadPaperFile, deletePaperFile, // ضفناهم هنا
+  grantRetake,
 } = require('../controllers/exam.controller');
 const { protect, isTeacher, isStudent } = require('../middleware/auth.middleware');
 const { uploadAnswerSheet } = require('../config/multer');
@@ -26,6 +27,7 @@ router.post('/:id/paper-file',   isTeacher, uploadAnswerSheet.single('paperFile'
 router.delete('/:id/paper-file', isTeacher, deletePaperFile);
 router.get('/:id/results',         isTeacher, getResults);
 router.get('/:id/results/:studentId', isTeacher, getSubmissionDetail);
+router.post('/:id/retake',         isTeacher, grantRetake); // المدرس فقط يقدر يمنح إعادة امتحان لطالب محدد
 
 // Student only
 router.post('/:id/submit',    protect, isStudent, submitExam);

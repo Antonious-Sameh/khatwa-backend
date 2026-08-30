@@ -2,6 +2,7 @@
 
 const Exam           = require('../models/Exam');
 const ExamSubmission = require('../models/ExamSubmission');
+const ExamRetake     = require('../models/ExamRetake');
 const User           = require('../models/User');
 const { cloudinary, uploadPDF } = require('../config/multer');
 const { success, created, notFound, error: apiError } = require('../utils/apiResponse');
@@ -243,10 +244,11 @@ const submitExam = asyncHandler(async (req, res) => {
   // (the "existing submission" filter only needs the id from the URL, not
   // the loaded exam document) — fetch all three in parallel, then validate
   // in the same order as before.
-  const [exam, student, existing] = await Promise.all([
+  const [exam, student, latestSubmission] = await Promise.all([
     Exam.findById(req.params.id),
     User.findById(studentId).lean(),
-    ExamSubmission.findOne({ exam: req.params.id, student: studentId }),
+    // Latest attempt so far (if any) — sort descending by attemptNumber.
+    ExamSubmission.findOne({ exam: req.params.id, student: studentId }).sort({ attemptNumber: -1 }),
   ]);
 
   if (!exam) return notFound(res, 'الامتحان غير موجود');
@@ -256,8 +258,17 @@ const submitExam = asyncHandler(async (req, res) => {
   if (!student || student.academicYear !== exam.academicYear)
     return apiError(res, 'هذا الامتحان غير مخصص لك', 403);
 
-  // Check already submitted
-  if (existing) return apiError(res, 'لقد حللت هذا الامتحان من قبل', 400);
+  // Check already submitted — a second (or later) attempt is only allowed
+  // when a teacher has explicitly granted a retake for this student. The
+  // previous submission is never touched; the new one gets the next
+  // attemptNumber and lives alongside it.
+  let attemptNumber = 1;
+  let retakeGrant = null;
+  if (latestSubmission) {
+    retakeGrant = await ExamRetake.findOne({ exam: req.params.id, student: studentId, status: 'pending' });
+    if (!retakeGrant) return apiError(res, 'لقد حللت هذا الامتحان من قبل', 400);
+    attemptNumber = latestSubmission.attemptNumber + 1;
+  }
 
   const { answers = [], timeTakenSeconds = 0 } = req.body;
 
@@ -286,7 +297,15 @@ const submitExam = asyncHandler(async (req, res) => {
     percentage: exam.maxScore > 0 ? Math.round((score / exam.maxScore) * 100) : 0,
     timeTakenSeconds,
     submittedAt: new Date(),
+    attemptNumber,
   });
+
+  // Consume the retake grant now that the new attempt exists.
+  if (retakeGrant) {
+    retakeGrant.status = 'used';
+    retakeGrant.usedAt = new Date();
+    await retakeGrant.save();
+  }
 
   return created(res, { submission, score, maxScore: exam.maxScore }, 'تم تسليم الامتحان وتصحيحه تلقائياً');
 });
@@ -295,14 +314,29 @@ const submitExam = asyncHandler(async (req, res) => {
 const getResults = asyncHandler(async (req, res) => {
   // submissions only need the id from the URL, not the loaded exam document,
   // so both queries can run in parallel.
-  const [exam, submissions] = await Promise.all([
+  const [exam, allSubmissions, pendingRetakes] = await Promise.all([
     Exam.findById(req.params.id).lean(),
     ExamSubmission.find({ exam: req.params.id })
       .populate('student', 'name codePlain academicYear')
-      .sort({ score: -1 })
+      .sort({ attemptNumber: -1 })
       .lean(),
+    ExamRetake.find({ exam: req.params.id, status: 'pending' }).select('student').lean(),
   ]);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
+
+  // A student may have more than one attempt when a teacher granted a
+  // retake. The main list should show each student once, with their LATEST
+  // attempt — older attempts stay in the database untouched (visible via
+  // getSubmissionDetail with ?attempt=N) but don't clutter this summary.
+  const seen = new Set();
+  const submissions = [];
+  for (const s of allSubmissions) {
+    const sid = (s.student?._id || s.student)?.toString();
+    if (!sid || seen.has(sid)) continue;
+    seen.add(sid);
+    submissions.push(s);
+  }
+  submissions.sort((a, b) => b.score - a.score);
 
   const avg = submissions.length > 0
     ? Math.round(submissions.reduce((s, r) => s + r.score, 0) / submissions.length)
@@ -311,6 +345,8 @@ const getResults = asyncHandler(async (req, res) => {
   return success(res, {
     exam: { _id: exam._id, title: exam.title, maxScore: exam.maxScore },
     submissions,
+    totalAttempts: allSubmissions.length,
+    pendingRetakeStudentIds: pendingRetakes.map(r => r.student.toString()),
     summary: {
       total: submissions.length,
       average: avg,
@@ -325,17 +361,25 @@ const getResults = asyncHandler(async (req, res) => {
 // text/options/imageUrl/correctAnswer) plus that student's submission (chosen
 // answers, correctness, points). Purely additive — does not change submitExam,
 // getResults, or getMyResult, and does not touch the grading logic itself.
+// Optional ?attempt=N query lets the teacher look at an older attempt; by
+// default it returns the student's latest one.
 const getSubmissionDetail = asyncHandler(async (req, res) => {
-  const [exam, submission] = await Promise.all([
+  const { attempt } = req.query;
+  const filter = { exam: req.params.id, student: req.params.studentId };
+  if (attempt) filter.attemptNumber = Number(attempt);
+
+  const [exam, submission, totalAttempts] = await Promise.all([
     Exam.findById(req.params.id).lean(),
-    ExamSubmission.findOne({ exam: req.params.id, student: req.params.studentId })
+    ExamSubmission.findOne(filter)
       .populate('student', 'name codePlain academicYear')
+      .sort({ attemptNumber: -1 })
       .lean(),
+    ExamSubmission.countDocuments({ exam: req.params.id, student: req.params.studentId }),
   ]);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
   if (!submission) return notFound(res, 'لا توجد محاولة لهذا الطالب في هذا الامتحان');
 
-  return success(res, { exam, submission });
+  return success(res, { exam, submission, totalAttempts });
 });
 
 // ── GET /api/exams/:id/my-result (student) ───────────────────────────────────
@@ -344,13 +388,56 @@ const getMyResult = asyncHandler(async (req, res) => {
 
   // The submission lookup only needs the id from the URL, not the loaded
   // exam document, so both queries can run in parallel.
-  const [exam, submission] = await Promise.all([
+  const [exam, submissions, retakeGrant] = await Promise.all([
     Exam.findById(req.params.id).lean(),
-    ExamSubmission.findOne({ exam: req.params.id, student: studentId }).lean(),
+    ExamSubmission.find({ exam: req.params.id, student: studentId }).sort({ attemptNumber: 1 }).lean(),
+    ExamRetake.findOne({ exam: req.params.id, student: studentId, status: 'pending' }).lean(),
   ]);
   if (!exam) return notFound(res, 'الامتحان غير موجود');
 
-  return success(res, { exam, submission: submission || null });
+  const submission = submissions.length ? submissions[submissions.length - 1] : null;
+
+  return success(res, {
+    exam,
+    submission: submission || null,
+    // Additive fields only — existing callers that just read `submission`
+    // keep working exactly as before.
+    previousAttempts: submissions.length > 1 ? submissions.slice(0, -1) : [],
+    canRetake: !!retakeGrant,
+  });
+});
+
+// ── POST /api/exams/:id/retake (teacher) ──────────────────────────────────────
+// Grants ONE specific student permission to submit another attempt at this
+// exam. Does not affect any other student, and never deletes/modifies the
+// student's previous submission — it only unlocks the next attemptNumber for
+// them (consumed by submitExam once they actually submit again).
+const grantRetake = asyncHandler(async (req, res) => {
+  const { studentId } = req.body;
+  if (!studentId) return apiError(res, 'معرف الطالب مطلوب', 400);
+
+  const [exam, student] = await Promise.all([
+    Exam.findById(req.params.id).lean(),
+    User.findById(studentId).lean(),
+  ]);
+  if (!exam) return notFound(res, 'الامتحان غير موجود');
+  if (exam.examType !== 'electronic') return apiError(res, 'إعادة الامتحان متاحة فقط للامتحانات الإلكترونية', 400);
+  if (!student || student.role !== 'student') return notFound(res, 'الطالب غير موجود');
+  if (student.academicYear !== exam.academicYear) return apiError(res, 'هذا الطالب ليس من نفس صف الامتحان', 400);
+
+  // Idempotent: reuse an already-pending grant instead of creating a
+  // duplicate one if the teacher clicks retake twice.
+  let grant = await ExamRetake.findOne({ exam: exam._id, student: studentId, status: 'pending' });
+  if (!grant) {
+    grant = await ExamRetake.create({
+      exam:      exam._id,
+      student:   studentId,
+      grantedBy: req.user.userId,
+      status:    'pending',
+    });
+  }
+
+  return created(res, { retake: grant }, 'تم منح الطالب محاولة جديدة للامتحان');
 });
 
 
@@ -395,5 +482,5 @@ module.exports = {
   getExams, getExam, createExam, updateExam, deleteExam,
   changeStatus, uploadAnswerSheet, deleteAnswerSheet,
   submitExam, getResults, getMyResult, getSubmissionDetail, uploadPaperFile, 
-  deletePaperFile,
+  deletePaperFile, grantRetake,
 };
