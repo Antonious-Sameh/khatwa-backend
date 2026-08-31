@@ -27,6 +27,19 @@ const addPointSchema = Joi.object({
   }),
 });
 
+// عمود "النقاط" في صفحة الدرجات — نقاط طالب مرتبطة بامتحان محدد (إلكتروني له
+// examId، أو ورقي له examType+examTitle). amount ممكن يوصل فاضي/صفر لما
+// المدرس يمسح الخانة — ده معناه "امسح نقاط هذا الامتحان لهذا الطالب"، مش خطأ.
+const setExamPointSchema = Joi.object({
+  studentId: OBJECT_ID.required().messages({ 'any.required': 'معرف الطالب مطلوب' }),
+  amount:    Joi.number().allow(null, '').optional(),
+  examId:    OBJECT_ID.optional().allow(null, ''),
+  examType:  Joi.string().valid('electronic', 'paper').optional().allow(null, ''),
+  examTitle: Joi.string().max(150).optional().allow(null, ''),
+})
+  .or('examId', 'examTitle')
+  .messages({ 'object.missing': 'بيانات الامتحان غير كافية' });
+
 // ── Notes ─────────────────────────────────────────────────────────────────────
 const createNoteSchema = Joi.object({
   type: Joi.string().valid('general', 'private').required().messages({
@@ -118,6 +131,7 @@ const updateHeroSchema = Joi.object({
 
 module.exports = {
   addPointSchema,
+  setExamPointSchema,
   createNoteSchema,
   createLessonSchema,
   updateLessonSchema,

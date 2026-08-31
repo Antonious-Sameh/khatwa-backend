@@ -152,4 +152,94 @@ const deletePoint = asyncHandler(async (req, res) => {
   return success(res, {}, 'تم حذف المعاملة بنجاح');
 });
 
-module.exports = { addPoint, getPoints, getStudentPoints, deletePoint };
+// ══════════════════════════════════════════════════════════════════════════════
+// EXAM-LINKED POINTS — the "النقاط" column in the grades sheet.
+// Reuses the same Point ledger above; each exam's value for a student is
+// just ONE 'add' transaction tagged with that exam (sourceExam for
+// electronic exams, sourceExamType+sourceExamTitle for paper exams), kept
+// separate from every other exam's transaction and from manual points
+// added elsewhere. Editing re-uses (upserts) that same transaction instead
+// of stacking new ones, so typing a new value never double-counts the old
+// one — and the overall balance returned by calcBalance/getPoints already
+// includes it automatically, since it is a normal 'add' row.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// Build the filter that identifies "this exam's point transactions" — the
+// student key is added by callers (setExamPoint scopes to one student,
+// getExamPoints leaves it out to fetch all students at once). Shared so
+// both endpoints always agree on the same documents.
+function examSourceFilter({ examId, examType, examTitle }) {
+  if (examId) {
+    return { sourceExam: examId };
+  }
+  if (examType === 'paper' && examTitle) {
+    return { sourceExam: null, sourceExamType: 'paper', sourceExamTitle: examTitle };
+  }
+  return null; // not enough info to identify an exam
+}
+
+// ── GET /api/points/by-exam?examId= | ?examType=paper&examTitle= ─────────────
+// Returns { studentId: amount } for every student who currently has points
+// recorded for THIS specific exam — used to pre-fill the "النقاط" column
+// when the teacher opens (or re-opens) an exam's grade sheet.
+const getExamPoints = asyncHandler(async (req, res) => {
+  const { examId, examType, examTitle } = req.query;
+
+  const sourceFilter = examSourceFilter({ examId, examType, examTitle });
+  if (!sourceFilter) return error(res, 'بيانات الامتحان غير كافية', 400);
+
+  const rows = await Point.find({ type: 'add', ...sourceFilter }).select('student amount').lean();
+  const points = {};
+  rows.forEach(p => { points[p.student.toString()] = p.amount; });
+
+  return success(res, { points });
+});
+
+// ── PUT /api/points/by-exam ────────────────────────────────────────────────────
+// body: { studentId, amount, examId? , examType?, examTitle? }
+// Upserts (or deletes, if amount is empty/0/negative) the ONE points
+// transaction linked to (student, exam). Never touches any other exam's
+// transaction or the student's manually-added points.
+const setExamPoint = asyncHandler(async (req, res) => {
+  const { studentId, amount, examId, examType, examTitle } = req.body;
+
+  const student = await User.findOne({ _id: studentId, role: 'student' }).lean();
+  if (!student) return notFound(res, 'الطالب غير موجود');
+
+  const sourceFilter = examSourceFilter({ examId, examType, examTitle });
+  if (!sourceFilter) return error(res, 'بيانات الامتحان غير كافية', 400);
+  const filter = { student: studentId, type: 'add', ...sourceFilter };
+
+  const numeric = amount === '' || amount === null || amount === undefined ? null : Number(amount);
+
+  // Empty / zero / invalid input → this exam contributes no points for this
+  // student. Remove any previously-saved transaction for it (if none
+  // exists, deleteOne is a harmless no-op) rather than storing a zero,
+  // since amount has a `min: 1` validator on the Point model.
+  if (numeric === null || isNaN(numeric) || numeric <= 0) {
+    await Point.deleteOne(filter);
+    const balance = await calcBalance(studentId);
+    return success(res, { amount: 0, balance }, 'تم مسح نقاط هذا الامتحان');
+  }
+
+  const point = await Point.findOneAndUpdate(
+    filter,
+    {
+      $set: {
+        amount: Math.round(numeric),
+        reason: examTitle ? `نقاط امتحان: ${examTitle}` : 'نقاط امتحان',
+        sourceExamType: examId ? 'electronic' : 'paper',
+        createdBy: req.user.userId,
+      },
+    },
+    { upsert: true, new: true, setDefaultsOnInsert: true }
+  );
+
+  const balance = await calcBalance(studentId);
+  return success(res, { point, balance }, 'تم حفظ النقاط');
+});
+
+module.exports = {
+  addPoint, getPoints, getStudentPoints, deletePoint,
+  getExamPoints, setExamPoint,
+};
